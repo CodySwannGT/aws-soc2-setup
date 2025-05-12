@@ -13,6 +13,7 @@ A comprehensive automation suite that guides you through setting up a fully SOC 
 - [Overview](#-overview)
 - [Features](#-features)
 - [Why Use This Suite](#-why-use-this-suite)
+- [AI Coding Assistant Integration](#-ai-coding-assistant-integration)
 - [Prerequisites](#-prerequisites)
 - [Installation](#-installation)
 - [Usage](#-usage)
@@ -56,6 +57,17 @@ AWS recommends a multi-account strategy for security isolation, but configuring 
 ### Reduce Cloud Security Expertise Requirements
 
 Not everyone on your team may be an AWS security expert. This suite codifies best practices and provides clear, actionable guidance throughout the process.
+
+## 🤖 AI Coding Assistant Integration
+
+This repository is configured to seamlessly integrate with AI Coding Assistants, leveraging the framework provided by [AI Coding Assistants Setup](https://github.com/codySwannGT/ai-coding-assistants-setup). This integration enhances the development experience by:
+
+- **Accelerating Development:** AI assistants can help generate boilerplate code, suggest solutions, and automate repetitive tasks.
+- **Improving Code Quality:** Assistants can provide real-time feedback on code style, identify potential bugs, and suggest best practices.
+- **Facilitating Complex Tasks:** AI can assist in understanding complex codebases, refactoring, and implementing new features more efficiently.
+- **Streamlining Workflows:** The setup enables a more interactive and intelligent development environment, allowing developers to focus on higher-level problem-solving.
+
+By incorporating AI-powered tools, this project aims to boost productivity and maintain high standards of code quality and innovation.
 
 ## 📋 Prerequisites
 
