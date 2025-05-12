@@ -1,0 +1,774 @@
+#!/bin/bash
+# master_control_tower_setup.sh - Orchestrates the AWS Control Tower setup process
+#
+# Description:
+#   This script serves as the master orchestrator for setting up a SOC 2 Compliant AWS Control Tower Setup Complete!
+echo "==================================================================="
+echo
+echo "Your AWS environment has been set up with SOC 2 compliant configurations."
+echo "Here's a summary of what was done:"
+echo
+echo "1. Set up AWS Control Tower with a multi-account structure"
+echo "2. Created administrative users and groups"
+echo "3. Enabled security services and controls"
+echo "4. Configured backup and audit capabilities"
+echo
+echo "Next steps:"
+echo "1. Review the configuration in the AWS Console"
+echo "2. Set up additional accounts as needed"
+echo "3. Implement additional controls based on your specific requirements"
+echo "4. Document your compliance posture for SOC 2 audits"
+echo
+echo "Thank you for using the AWS Control Tower SOC 2 Setup Script!"compliant
+#   AWS Control Tower environment. It calls individual scripts in sequence, prompts
+#   for necessary inputs, and guides the user through manual steps.
+#   The script now checks if steps have already been completed before proceeding.
+#
+# Usage:
+#   ./master_control_tower_setup.sh [-a ACCOUNT_ID] [-p PROFILE] [-r REGION] [-h]
+#
+# Parameters:
+#   -a ACCOUNT_ID   AWS account ID (optional, will prompt if not provided)
+#   -p PROFILE      Initial AWS CLI profile name (optional, default: thehobbyhome)
+#   -r REGION       AWS region (optional, default: us-east-1)
+#   -h              Display this help message and exit
+
+# Display help message
+display_help() {
+    grep '^#' "$0" | grep -v '#!/bin/bash' | sed 's/^# //' | sed 's/^#//'
+    exit 0
+}
+
+# Set default values
+AWS_ACCOUNT_ID=""
+INITIAL_PROFILE="thehobbyhome"
+ADMIN_PROFILE="thehobbyhome-admin"
+AWS_REGION="us-east-1"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+USERS_GROUP="InitialUsers"
+
+# Parse command line options
+while getopts ":a:p:r:h" opt; do
+    case ${opt} in
+        a )
+            AWS_ACCOUNT_ID=$OPTARG
+            ;;
+        p )
+            INITIAL_PROFILE=$OPTARG
+            ;;
+        r )
+            AWS_REGION=$OPTARG
+            ;;
+        h )
+            display_help
+            ;;
+        \? )
+            echo "Invalid option: $OPTARG" 1>&2
+            display_help
+            ;;
+        : )
+            echo "Invalid option: $OPTARG requires an argument" 1>&2
+            display_help
+            ;;
+    esac
+done
+
+# Function to wait for user to complete a manual step
+wait_for_manual_step() {
+    local step_name=$1
+    local instructions=$2
+    
+    echo
+    echo "==================================================================="
+    echo "MANUAL STEP REQUIRED: $step_name"
+    echo "==================================================================="
+    echo "$instructions"
+    echo
+    read -p "Press Enter once you have completed this step... "
+    echo
+}
+
+# Function to prompt for a yes/no answer
+prompt_yes_no() {
+    local prompt=$1
+    local default=${2:-"y"}
+    local answer
+    
+    if [ "$default" = "y" ]; then
+        prompt="$prompt [Y/n]: "
+    else
+        prompt="$prompt [y/N]: "
+    fi
+    
+    while true; do
+        read -p "$prompt" answer
+        answer=${answer:-$default}
+        
+        case ${answer:0:1} in
+            y|Y )
+                return 0
+                ;;
+            n|N )
+                return 1
+                ;;
+            * )
+                echo "Please answer yes (y) or no (n)."
+                ;;
+        esac
+    done
+}
+
+# Function to check if a step has been completed already
+check_step_completed() {
+    local step_name=$1
+    
+    if prompt_yes_no "Have you already completed: $step_name?" "n"; then
+        echo "Skipping $step_name as it has already been completed."
+        return 0
+    else
+        echo "Proceeding with $step_name..."
+        return 1
+    fi
+}
+
+# Check required scripts
+required_scripts=(
+    "configure_sso_profile.sh"
+    "create_sso_user.sh"
+    "delete_root_user_access_key.sh"
+    "update_identity_center_start_url.sh"
+    "create_organizational_units.sh"
+    "enable_control_tower_controls.sh"
+    "enable_security_services.sh"
+    "provision_account.sh"
+    "configure_aws_backup.sh"
+    "manage_kms_keys.sh"
+    "configure_audit_reporting.sh"
+    "assign_sso_permissions.sh"
+    "manage_sso_group.sh"
+)
+
+for script in "${required_scripts[@]}"; do
+    if [ ! -f "$SCRIPT_DIR/$script" ]; then
+        echo "ERROR: Required script '$script' not found in $SCRIPT_DIR!" 1>&2
+        exit 1
+    fi
+    
+    if [ ! -x "$SCRIPT_DIR/$script" ]; then
+        chmod +x "$SCRIPT_DIR/$script"
+    fi
+done
+
+# Welcome message
+clear
+echo "==================================================================="
+echo "  AWS Control Tower SOC 2 Compliant Setup"
+echo "==================================================================="
+echo
+echo "This script will guide you through the process of setting up a SOC 2"
+echo "compliant AWS environment using Control Tower."
+echo
+echo "For each step, you will be asked if you've already completed it."
+echo "If you have, the script will skip that step and move to the next one."
+echo
+echo "The process includes several steps that require manual intervention."
+echo "You will be prompted when manual steps are required."
+echo
+
+# Prompt for account ID if not provided
+if [ -z "$AWS_ACCOUNT_ID" ]; then
+    read -p "Enter your AWS account ID (12 digits): " AWS_ACCOUNT_ID
+fi
+
+# Validate account ID
+if ! [[ "$AWS_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
+    echo "ERROR: Invalid account ID. Must be a 12-digit number." 1>&2
+    exit 1
+fi
+
+# Confirm settings
+echo
+echo "Setup will proceed with the following settings:"
+echo "  - AWS Account ID: $AWS_ACCOUNT_ID"
+echo "  - Initial CLI Profile: $INITIAL_PROFILE"
+echo "  - Admin Profile Name (will be created): $ADMIN_PROFILE"
+echo "  - AWS Region: $AWS_REGION"
+echo
+
+if ! prompt_yes_no "Do you want to continue with these settings?"; then
+    echo "Setup canceled. Adjust settings and try again."
+    exit 0
+fi
+
+# STEP 1: Initial AWS CLI profile setup
+echo
+echo "==================================================================="
+echo "STEP 1: Initial AWS CLI Profile Setup"
+echo "==================================================================="
+echo "First, we need to set up the initial AWS CLI profile for root user access."
+echo "This profile will be used only temporarily and the access keys will be"
+echo "deleted once Control Tower is set up."
+echo
+
+if ! check_step_completed "Initial AWS CLI profile setup"; then
+    if prompt_yes_no "Do you need to create the initial AWS CLI profile for root user?"; then
+        wait_for_manual_step "Create Root User Access Keys" "
+1. Sign in to the AWS Management Console as the root user
+2. Go to your Security credentials page
+3. Under 'Access keys', click 'Create access key'
+4. Acknowledge the security warning
+5. Copy the Access Key ID and Secret Access Key
+"
+
+        # Configure the initial profile
+        aws configure set aws_access_key_id "$(read -p 'Enter Access Key ID: ' && echo $REPLY)" --profile "$INITIAL_PROFILE"
+        aws configure set aws_secret_access_key "$(read -p 'Enter Secret Access Key: ' && echo $REPLY)" --profile "$INITIAL_PROFILE"
+        aws configure set region "$AWS_REGION" --profile "$INITIAL_PROFILE"
+        aws configure set output "json" --profile "$INITIAL_PROFILE"
+        
+        # Verify the profile
+        echo "Verifying AWS profile..."
+        if ! aws sts get-caller-identity --profile "$INITIAL_PROFILE" > /dev/null 2>&1; then
+            echo "ERROR: Could not validate AWS credentials. Please check the access keys and try again." 1>&2
+            exit 1
+        fi
+        
+        echo "AWS CLI profile '$INITIAL_PROFILE' successfully configured."
+    else
+        echo "Skipping initial profile creation. Make sure the '$INITIAL_PROFILE' profile is configured."
+    fi
+    
+    # Verify the profile exists in any case
+    if ! aws configure list --profile "$INITIAL_PROFILE" > /dev/null 2>&1; then
+        echo "ERROR: AWS profile '$INITIAL_PROFILE' not found!" 1>&2
+        exit 1
+    fi
+fi
+
+# STEP 2: Enable MFA for Root User
+echo
+echo "==================================================================="
+echo "STEP 2: Enable MFA for Root User"
+echo "==================================================================="
+echo "Multi-Factor Authentication (MFA) must be enabled for the root user."
+echo "This is a critical security measure and a SOC 2 requirement."
+echo
+
+if ! check_step_completed "MFA setup for root user"; then
+    wait_for_manual_step "Enable MFA for Root User" "
+1. Sign in to the AWS Management Console as the root user
+2. Go to the IAM dashboard
+3. Click on 'Add MFA' for the root user
+4. Follow the prompts to set up a virtual MFA device
+5. Store the MFA credentials securely
+"
+fi
+
+# STEP 3: Enable IAM Identity Center
+echo
+echo "==================================================================="
+echo "STEP 3: Enable IAM Identity Center"
+echo "==================================================================="
+echo "IAM Identity Center (formerly AWS SSO) is required for Control Tower."
+echo "It must be enabled before proceeding with Control Tower setup."
+echo
+
+if ! check_step_completed "IAM Identity Center setup"; then
+    wait_for_manual_step "Enable IAM Identity Center" "
+1. Sign in to the AWS Management Console
+2. Navigate to IAM Identity Center
+3. Click 'Enable IAM Identity Center'
+4. Choose 'Default directory provided by IAM Identity Center' as your identity source
+5. Complete the setup process
+"
+fi
+
+# STEP 4: Set up AWS Control Tower
+echo
+echo "==================================================================="
+echo "STEP 4: Set up AWS Control Tower"
+echo "==================================================================="
+echo "Now you'll set up AWS Control Tower, which will create the foundation"
+echo "for your multi-account environment."
+echo
+
+if ! check_step_completed "AWS Control Tower setup"; then
+    wait_for_manual_step "Set up AWS Control Tower" "
+1. Sign in to the AWS Management Console
+2. Navigate to AWS Control Tower
+3. Click 'Set up landing zone'
+4. Follow the setup wizard with these settings:
+   - Home Region: $AWS_REGION
+   - Additional Regions: Select as needed
+   - Enable KMS encryption with a new key
+   - Use default OU names (Security, Sandbox)
+5. Review settings and click 'Set up landing zone'
+
+This process will take 30-60 minutes to complete. 
+You'll receive an email when it's done.
+"
+fi
+
+# Check if Control Tower is actually set up
+aws controltower describe-landing-zone --profile "$INITIAL_PROFILE" > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "WARNING: AWS Control Tower doesn't appear to be fully set up yet."
+    if ! prompt_yes_no "Are you sure AWS Control Tower setup is complete?"; then
+        echo "Please wait for Control Tower setup to complete before continuing."
+        echo "You can rerun this script when the setup is finished."
+        exit 0
+    fi
+fi
+
+# STEP 5: Create and configure admin user
+echo
+echo "==================================================================="
+echo "STEP 5: Create Admin User in IAM Identity Center"
+echo "==================================================================="
+echo "Now we'll create an administrative user in IAM Identity Center."
+echo "This user will be used for all subsequent operations."
+echo
+
+if ! check_step_completed "Admin user creation in IAM Identity Center"; then
+    # Ask for admin user information
+    echo "Enter information for the admin user:"
+    read -p "Username (default: admin): " admin_username
+    admin_username=${admin_username:-"admin"}
+    read -p "First name (default: Admin): " admin_firstname
+    admin_firstname=${admin_firstname:-"Admin"}
+    read -p "Last name (default: User): " admin_lastname
+    admin_lastname=${admin_lastname:-"User"}
+    read -p "Email: " admin_email
+
+    # Validate email (basic validation)
+    while ! [[ "$admin_email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; do
+        echo "ERROR: Invalid email format. Please enter a valid email address."
+        read -p "Email: " admin_email
+    done
+
+    # Create the admin user
+    echo "Creating admin user..."
+    "$SCRIPT_DIR/create_sso_user.sh" -p "$INITIAL_PROFILE" -u "$admin_username" -f "$admin_firstname" -l "$admin_lastname" -e "$admin_email"
+
+    wait_for_manual_step "Set Admin User Password" "
+1. Sign in to the AWS Management Console
+2. Navigate to IAM Identity Center
+3. Go to Users
+4. Select the user '$admin_username'
+5. Click on 'Reset password' to set the initial password
+6. Send the temporary password to the user's email
+"
+else
+    # Ask for the admin username if step was completed already
+    read -p "Please enter the username of your admin user (default: admin): " admin_username
+    admin_username=${admin_username:-"admin"}
+fi
+
+# Get Account IDs created by Control Tower
+echo "Retrieving AWS Organization accounts..."
+ORG_ACCOUNTS=$(aws organizations list-accounts --profile "$INITIAL_PROFILE" --query "Accounts[?Status=='ACTIVE'].{ID:Id,Name:Name}" --output json)
+
+if [ -z "$ORG_ACCOUNTS" ]; then
+    echo "ERROR: No accounts found in the organization. Make sure Control Tower setup is complete." 1>&2
+    exit 1
+fi
+
+# Extract account IDs and names
+MANAGEMENT_ACCOUNT_ID="$AWS_ACCOUNT_ID"
+echo "Management account ID: $MANAGEMENT_ACCOUNT_ID"
+
+# Find log archive and audit accounts
+LOG_ARCHIVE_ACCOUNT=$(echo "$ORG_ACCOUNTS" | jq -r '.[] | select(.Name | contains("Log Archive")) | .ID')
+AUDIT_ACCOUNT=$(echo "$ORG_ACCOUNTS" | jq -r '.[] | select(.Name | contains("Audit")) | .ID')
+
+echo "Log Archive account ID: $LOG_ARCHIVE_ACCOUNT"
+echo "Audit account ID: $AUDIT_ACCOUNT"
+
+# Assign admin permissions to the admin user for all accounts
+if ! check_step_completed "Administrator access assignment to admin user"; then
+    echo "Assigning administrator access to $admin_username for management account..."
+    "$SCRIPT_DIR/assign_sso_permissions.sh" -p "$INITIAL_PROFILE" -u "$admin_username" -a "$MANAGEMENT_ACCOUNT_ID" -r "AdministratorAccess"
+fi
+
+# Configure SSO profile for admin user
+if ! check_step_completed "SSO profile configuration for admin user"; then
+    wait_for_manual_step "Configure SSO Profile for Admin User" "
+1. Open a new terminal window
+2. Run the command: aws configure sso
+3. Enter the following information when prompted:
+   - SSO start URL: https://<your-sso-portal>.awsapps.com/start
+   - SSO Region: $AWS_REGION
+   - Profile name: $ADMIN_PROFILE
+   - Default region: $AWS_REGION
+   - Default output format: json
+4. Sign in through the browser when prompted
+5. Select the management account and AdministratorAccess permission set
+6. Return to this terminal when done
+"
+
+    # Verify the admin profile
+    echo "Verifying admin profile..."
+    if ! aws sts get-caller-identity --profile "$ADMIN_PROFILE" > /dev/null 2>&1; then
+        echo "ERROR: Could not validate admin profile. Please check the configuration and try again." 1>&2
+        exit 1
+    fi
+
+    echo "Admin profile '$ADMIN_PROFILE' successfully configured."
+fi
+
+# Delete root user access keys
+if ! check_step_completed "Root user access key deletion"; then
+    echo "Deleting root user access keys..."
+    "$SCRIPT_DIR/delete_root_user_access_key.sh"
+fi
+
+# STEP 6: Create IAM Identity Center group for initial users
+echo
+echo "==================================================================="
+echo "STEP 6: Create IAM Identity Center Group for Initial Users"
+echo "==================================================================="
+echo "Now we'll create a group for initial users with administrative access."
+echo
+
+if ! check_step_completed "IAM Identity Center group creation"; then
+    # Create the InitialUsers group
+    echo "Creating $USERS_GROUP group..."
+    "$SCRIPT_DIR/manage_sso_group.sh" -p "$ADMIN_PROFILE" -g "$USERS_GROUP" -d "Initial administrative users for Control Tower setup"
+else 
+    # Check if they want to use a different group name
+    read -p "Please enter the name of your initial users group (default: $USERS_GROUP): " custom_group_name
+    if [ -n "$custom_group_name" ]; then
+        USERS_GROUP="$custom_group_name"
+    fi
+fi
+
+# STEP 7: Create additional users
+echo
+echo "==================================================================="
+echo "STEP 7: Create Additional Users"
+echo "==================================================================="
+echo "Now you can create additional users who will have admin access."
+echo
+
+if ! check_step_completed "Additional user creation"; then
+    # Array to store user information
+    declare -a USER_INFO=()
+
+    # Collect user information
+    collect_user_info() {
+        local username firstname lastname email
+        
+        echo
+        echo "Enter information for a new user:"
+        read -p "Username: " username
+        read -p "First name: " firstname
+        read -p "Last name: " lastname
+        read -p "Email: " email
+        
+        USER_INFO+=("$username:$firstname:$lastname:$email")
+    }
+
+    # Prompt to add users
+    while prompt_yes_no "Do you want to add a user?"; do
+        collect_user_info
+    done
+
+    # Create the users
+    if [ ${#USER_INFO[@]} -gt 0 ]; then
+        echo "Creating users..."
+        
+        # To collect all usernames for group assignment
+        ALL_USERNAMES=""
+        
+        for user_info in "${USER_INFO[@]}"; do
+            IFS=':' read -r username firstname lastname email <<< "$user_info"
+            
+            # Create the user
+            echo "Creating user $username..."
+            "$SCRIPT_DIR/create_sso_user.sh" -p "$ADMIN_PROFILE" -u "$username" -f "$firstname" -l "$lastname" -e "$email"
+            
+            ALL_USERNAMES="$ALL_USERNAMES $username"
+        done
+        
+        # Add all created users to the group
+        echo "Adding users to $USERS_GROUP group..."
+        "$SCRIPT_DIR/manage_sso_group.sh" -p "$ADMIN_PROFILE" -g "$USERS_GROUP" -u "$admin_username $ALL_USERNAMES"
+        
+        # Ask if they want to assign permissions to all accounts
+        if prompt_yes_no "Do you want to assign administrator access to the $USERS_GROUP group for all core accounts?"; then
+            echo "Assigning administrator access to $USERS_GROUP group for management account..."
+            "$SCRIPT_DIR/manage_sso_group.sh" -p "$ADMIN_PROFILE" -g "$USERS_GROUP" -a "$MANAGEMENT_ACCOUNT_ID" -r "AdministratorAccess"
+            
+            echo "Assigning administrator access to $USERS_GROUP group for Log Archive account..."
+            "$SCRIPT_DIR/manage_sso_group.sh" -p "$ADMIN_PROFILE" -g "$USERS_GROUP" -a "$LOG_ARCHIVE_ACCOUNT" -r "AdministratorAccess"
+            
+            echo "Assigning administrator access to $USERS_GROUP group for Audit account..."
+            "$SCRIPT_DIR/manage_sso_group.sh" -p "$ADMIN_PROFILE" -g "$USERS_GROUP" -a "$AUDIT_ACCOUNT" -r "AdministratorAccess"
+        fi
+        
+        wait_for_manual_step "Set User Passwords" "
+1. Sign in to the AWS Management Console
+2. Navigate to IAM Identity Center
+3. Go to Users
+4. For each user, click on their name and select 'Reset password'
+5. Send the temporary passwords to the users' emails
+"
+    fi
+fi
+
+# STEP 8: Create Organizational Units
+echo
+echo "==================================================================="
+echo "STEP 8: Create Organizational Units"
+echo "==================================================================="
+echo "Now we'll create additional organizational units for your environment."
+echo
+
+if ! check_step_completed "Organizational Units creation"; then
+    if prompt_yes_no "Do you want to create recommended organizational units (Infrastructure, Workloads, Sandbox)?"; then
+        echo "Creating organizational units..."
+        "$SCRIPT_DIR/create_organizational_units.sh" -p "$ADMIN_PROFILE" -a
+        
+        wait_for_manual_step "Register OUs with Control Tower" "
+1. Sign in to the AWS Management Console
+2. Navigate to AWS Control Tower
+3. Go to Organization
+4. For each OU (Infrastructure, Workloads, Sandbox), select the OU and click 'Register'
+5. Follow the prompts to register the OU with Control Tower
+"
+    fi
+fi
+
+# STEP 9: Enable Security Services
+echo
+echo "==================================================================="
+echo "STEP 9: Enable Security Services"
+echo "==================================================================="
+echo "Now we'll enable security services required for SOC 2 compliance."
+echo
+
+if ! check_step_completed "Security services enablement"; then
+    if prompt_yes_no "Do you want to enable security services (GuardDuty, Security Hub, Config, Macie, Inspector)?"; then
+        echo "Enabling security services..."
+        "$SCRIPT_DIR/enable_security_services.sh" -p "$ADMIN_PROFILE" -a
+    fi
+fi
+
+# STEP 10: Enable Control Tower Controls
+echo
+echo "==================================================================="
+echo "STEP 10: Enable Control Tower Controls"
+echo "==================================================================="
+echo "Now we'll enable additional Control Tower controls for SOC 2 compliance."
+echo
+
+if ! check_step_completed "Control Tower controls enablement"; then
+    if prompt_yes_no "Do you want to enable SOC 2 specific controls?"; then
+        # Get OUs
+        ROOT_ID=$(aws organizations list-roots --profile "$ADMIN_PROFILE" --query "Roots[0].Id" --output text)
+        OUS=$(aws organizations list-organizational-units-for-parent --parent-id "$ROOT_ID" --profile "$ADMIN_PROFILE" --query "OrganizationalUnits[].{Name:Name,Id:Id}" --output json)
+        
+        # Display OUs and let user select
+        echo "Available Organizational Units:"
+        echo "$OUS" | jq -r '.[] | .Name + " (" + .Id + ")"'
+        
+        read -p "Enter the OU ID to apply controls to: " OU_ID
+        
+        # Validate OU ID
+        if ! echo "$OUS" | jq -r '.[].Id' | grep -q "$OU_ID"; then
+            echo "ERROR: Invalid OU ID. Please check the ID and try again." 1>&2
+        else
+            echo "Enabling SOC 2 controls for OU $OU_ID..."
+            "$SCRIPT_DIR/enable_control_tower_controls.sh" -p "$ADMIN_PROFILE" -o "$OU_ID" -s both -b recommended
+        fi
+    fi
+fi
+
+# STEP 11: Configure AWS Backup
+echo
+echo "==================================================================="
+echo "STEP 11: Configure AWS Backup"
+echo "==================================================================="
+echo "Now we'll configure AWS Backup for data protection."
+echo
+
+if ! check_step_completed "AWS Backup configuration"; then
+    if prompt_yes_no "Do you want to configure AWS Backup?"; then
+        echo "Configuring AWS Backup..."
+        "$SCRIPT_DIR/configure_aws_backup.sh" -p "$ADMIN_PROFILE" -c "$LOG_ARCHIVE_ACCOUNT" -a "$AUDIT_ACCOUNT"
+    fi
+fi
+
+# STEP 12: Configure Audit and Reporting
+echo
+echo "==================================================================="
+echo "STEP 12: Configure Audit and Reporting"
+echo "==================================================================="
+echo "Now we'll configure audit and reporting capabilities."
+echo
+
+if ! check_step_completed "Audit and reporting configuration"; then
+    if prompt_yes_no "Do you want to configure audit and reporting?"; then
+        echo "Configuring audit and reporting..."
+        "$SCRIPT_DIR/configure_audit_reporting.sh" -p "$ADMIN_PROFILE" -a -f -r
+    fi
+fi
+
+# STEP 13: Provision Additional Accounts (if needed)
+echo
+echo "==================================================================="
+echo "STEP 13: Provision Additional Accounts (Optional)"
+echo "==================================================================="
+echo "You can provision additional accounts through Control Tower Account Factory."
+echo
+
+if prompt_yes_no "Do you want to provision additional accounts?" "n"; then
+    # Get OUs for selection
+    ROOT_ID=$(aws organizations list-roots --profile "$ADMIN_PROFILE" --query "Roots[0].Id" --output text)
+    OUS=$(aws organizations list-organizational-units-for-parent --parent-id "$ROOT_ID" --profile "$ADMIN_PROFILE" --query "OrganizationalUnits[].{Name:Name,Id:Id}" --output json)
+    
+    # Loop to provision multiple accounts if needed
+    while prompt_yes_no "Do you want to provision an account?"; then
+        # Get account information
+        read -p "Account name: " account_name
+        read -p "Account email: " account_email
+        
+        # Get OU selection
+        echo "Available Organizational Units:"
+        echo "$OUS" | jq -r '.[] | .Name + " (" + .Id + ")"'
+        read -p "Enter the OU name to place the account in: " ou_name
+        
+        # Provision the account
+        echo "Provisioning account $account_name..."
+        "$SCRIPT_DIR/provision_account.sh" -p "$ADMIN_PROFILE" -n "$account_name" -e "$account_email" -o "$ou_name"
+        
+        # Get the new account ID once it's created
+        wait_for_manual_step "Wait for Account Provisioning" "
+1. The account provisioning process is running in the background
+2. This typically takes 30-60 minutes to complete
+3. You can check the status in the AWS Control Tower console
+4. Once complete, the account will appear in the AWS Organizations console
+"
+        
+        # Update the organization accounts list
+        ORG_ACCOUNTS=$(aws organizations list-accounts --profile "$ADMIN_PROFILE" --query "Accounts[?Status=='ACTIVE'].{ID:Id,Name:Name}" --output json)
+        
+        # Find the new account ID
+        NEW_ACCOUNT_ID=$(echo "$ORG_ACCOUNTS" | jq -r --arg name "$account_name" '.[] | select(.Name == $name) | .ID')
+        if [ -n "$NEW_ACCOUNT_ID" ]; then
+            echo "New account ID: $NEW_ACCOUNT_ID"
+            
+            # Ask if they want to assign permissions
+            if prompt_yes_no "Do you want to assign administrator access to $USERS_GROUP group for the new account?"; then
+                # Assign group permissions to the new account
+                echo "Assigning administrator access to $USERS_GROUP group for the new account..."
+                "$SCRIPT_DIR/manage_sso_group.sh" -p "$ADMIN_PROFILE" -g "$USERS_GROUP" -a "$NEW_ACCOUNT_ID" -r "AdministratorAccess"
+            fi
+        else
+            echo "WARNING: Could not find the new account ID. You'll need to manually assign permissions."
+        fi
+    done
+fi
+
+# STEP 14: Configure Custom Domain for IAM Identity Center (optional)
+echo
+echo "==================================================================="
+echo "STEP 14: Configure Custom Domain for IAM Identity Center (Optional)"
+echo "==================================================================="
+echo "You can set up a custom domain for IAM Identity Center to improve user experience."
+echo
+
+if ! check_step_completed "Custom domain configuration for IAM Identity Center"; then
+    if prompt_yes_no "Do you want to configure a custom domain for IAM Identity Center?" "n"; then
+        read -p "Enter your domain name (e.g., thehobbyhome): " DOMAIN_NAME
+        
+        wait_for_manual_step "Configure Custom Domain" "
+1. Sign in to the AWS Management Console
+2. Navigate to IAM Identity Center
+3. Go to Settings
+4. Under 'Identity source', click 'Customize'
+5. Set up the custom domain following the instructions
+6. After the domain is verified, proceed
+"
+        
+        echo "Updating SSO profiles to use the new domain..."
+        "$SCRIPT_DIR/update_identity_center_start_url.sh" "$ADMIN_PROFILE" "$DOMAIN_NAME"
+    fi
+fi
+
+# STEP 15: Set up KMS Key Management
+echo
+echo "==================================================================="
+echo "STEP 15: Configure KMS Key Management (Optional)"
+echo "==================================================================="
+echo "You can configure additional access to KMS keys created during setup."
+echo
+
+if ! check_step_completed "KMS key management configuration"; then
+    if prompt_yes_no "Do you want to manage KMS key access?" "n"; then
+        # Get KMS keys
+        KMS_KEYS=$(aws kms list-keys --profile "$ADMIN_PROFILE" --query "Keys[].KeyId" --output json)
+        
+        echo "Available KMS keys:"
+        COUNT=1
+        KEY_MAP=()
+        
+        for key_id in $(echo "$KMS_KEYS" | jq -r '.[]'); do
+            key_desc=$(aws kms describe-key --key-id "$key_id" --profile "$ADMIN_PROFILE" --query "KeyMetadata.{Id:KeyId,Desc:Description}" --output json 2>/dev/null)
+            if [ $? -eq 0 ]; then
+                desc=$(echo "$key_desc" | jq -r '.Desc')
+                echo "$COUNT) $key_id - $desc"
+                KEY_MAP+=("$key_id")
+                COUNT=$((COUNT+1))
+            fi
+        done
+        
+        read -p "Enter the number of the key to manage (1-$((COUNT-1))): " key_num
+        
+        if [[ "$key_num" =~ ^[0-9]+$ ]] && [ "$key_num" -ge 1 ] && [ "$key_num" -le $((COUNT-1)) ]; then
+            SELECTED_KEY="${KEY_MAP[$((key_num-1))]}"
+            
+            echo "Selected key: $SELECTED_KEY"
+            echo "Adding $USERS_GROUP group administrators to key..."
+            
+            # Get the group's role ARN
+            IDENTITY_STORE_ID=$(aws sso-admin list-instances --profile "$ADMIN_PROFILE" --query "Instances[0].IdentityStoreId" --output text)
+            GROUP_ID=$(aws identitystore list-groups \
+                --identity-store-id "$IDENTITY_STORE_ID" \
+                --filters "AttributePath=DisplayName,AttributeValue=$USERS_GROUP" \
+                --profile "$ADMIN_PROFILE" \
+                --query "Groups[0].GroupId" \
+                --output text)
+            
+            # Assuming the group has a corresponding role
+            GROUP_ROLE_ARN="arn:aws:iam::$MANAGEMENT_ACCOUNT_ID:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_AdministratorAccess_*"
+            
+            # Add the group's role as a key administrator
+            "$SCRIPT_DIR/manage_kms_keys.sh" -p "$ADMIN_PROFILE" -k "$SELECTED_KEY" -a "$GROUP_ROLE_ARN" -e
+        else
+            echo "Invalid selection. Skipping key management."
+        fi
+    fi
+fi
+
+# Done
+echo
+echo "==================================================================="
+echo "SOC 2 Compliant AWS Control Tower Setup Complete!"
+echo "==================================================================="
+echo
+echo "Your AWS environment has been set up with SOC 2 compliant configurations."
+echo "Here's a summary of what was done:"
+echo
+echo "1. Set up AWS Control Tower with a multi-account structure"
+echo "2. Created administrative users and groups"
+echo "3. Enabled security services and controls"
+echo "4. Configured backup and audit capabilities"
+echo
+echo "Next steps:"
+echo "1. Review the configuration in the AWS Console"
+echo "2. Set up additional accounts as needed"
+echo "3. Implement additional controls based on your specific requirements"
+echo "4. Document your compliance posture for SOC 2 audits"
+echo
+echo "Thank you for using the AWS Control Tower SOC 2 Setup Script!"

@@ -1,0 +1,12 @@
+{
+  "name": "aws-setup",
+  "version": "1.0.0",
+  "description": "[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![SOC 2 Compliant](https://img.shields.io/badge/SOC%202-Compliant-green)](https://www.aicpa.org/interestareas/frc/assuranceadvisoryservices/soc2relevantguidance.html) [![AWS Control Tower](https://img.shields.io/badge/AWS-Control%20Tower-orange)](https://aws.amazon.com/controltower/)",
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}
