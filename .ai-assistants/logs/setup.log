@@ -1,3 +1,35 @@
 {"level":"info","message":"[HEADER] Configuring MCP servers","timestamp":"2025-05-11T23:58:28.671Z"}
 {"level":"warn","message":"[WARNING] Could not detect GitHub repository information. Using defaults.","timestamp":"2025-05-11T23:58:40.704Z"}
 {"level":"error","message":"[ERROR] Error: Module \"file:///Users/cody/.npm/_npx/b3ab4d2e60675263/node_modules/ai-coding-assistants-setup/src/config/config-schema.json\" needs an import attribute of type \"json\"","timestamp":"2025-05-12T00:02:44.401Z"}
+{"level":"info","message":"[HEADER] Configuring MCP servers","timestamp":"2025-05-12T00:32:44.666Z"}
+{"level":"warn","message":"[WARNING] Could not detect GitHub repository information. Using defaults.","timestamp":"2025-05-12T00:32:55.880Z"}
+{"level":"info","message":"[SUCCESS] MCP servers configured.","timestamp":"2025-05-12T00:35:45.498Z"}
+{"level":"info","message":"[HEADER] Claude Code Setup","timestamp":"2025-05-12T00:35:50.839Z"}
+{"level":"info","message":"[SUCCESS] Created CLAUDE.md file","timestamp":"2025-05-12T00:41:00.138Z"}
+{"level":"info","message":"[SUCCESS] Claude Code configuration completed!","timestamp":"2025-05-12T00:41:00.140Z"}
+{"level":"info","message":"[HEADER] Roo Code Setup","timestamp":"2025-05-12T00:41:00.140Z"}
+{"level":"info","message":"[SUCCESS] Created standard rules for Roo Code","timestamp":"2025-05-12T00:42:49.323Z"}
+{"level":"info","message":"[SUCCESS] Created .rooignore file","timestamp":"2025-05-12T00:42:49.326Z"}
+{"level":"info","message":"[SUCCESS] Created Roo MCP configuration","timestamp":"2025-05-12T00:42:49.331Z"}
+{"level":"info","message":"[HEADER] Setting up Roo Code Custom Modes","timestamp":"2025-05-12T00:42:49.335Z"}
+{"level":"info","message":"[SUCCESS] Created Roo custom modes configuration","timestamp":"2025-05-12T00:42:55.286Z"}
+{"level":"info","message":"[SUCCESS] Created mode-specific rules for 🏗️ Architect","timestamp":"2025-05-12T00:42:55.287Z"}
+{"level":"info","message":"[SUCCESS] Created mode-specific rules for 🧪 TDD Developer","timestamp":"2025-05-12T00:42:55.287Z"}
+{"level":"info","message":"[SUCCESS] Created mode-specific rules for 🔒 Security Reviewer","timestamp":"2025-05-12T00:42:55.288Z"}
+{"level":"info","message":"[SUCCESS] Created mode-specific rules for 📝 Documentation Writer","timestamp":"2025-05-12T00:42:55.289Z"}
+{"level":"info","message":"[SUCCESS] Created mode-specific rules for 📊 Data Analyst","timestamp":"2025-05-12T00:42:55.291Z"}
+{"level":"info","message":"[SUCCESS] Created mode-specific rules for 🚀 DevOps Engineer","timestamp":"2025-05-12T00:42:55.291Z"}
+{"level":"info","message":"[SUCCESS] Created mode-specific rules for 🔍 Code Reviewer","timestamp":"2025-05-12T00:42:55.292Z"}
+{"level":"info","message":"[SUCCESS] Roo Code configuration completed!","timestamp":"2025-05-12T00:42:55.292Z"}
+{"level":"info","message":"[HEADER] Setting up .gitignore patterns","timestamp":"2025-05-12T00:42:55.292Z"}
+{"level":"info","message":"[SUCCESS] .gitignore updated with AI assistant patterns.","timestamp":"2025-05-12T00:42:55.293Z"}
+{"level":"info","message":"[SUCCESS] Created/updated .env.example file for reference.","timestamp":"2025-05-12T00:42:55.293Z"}
+{"level":"info","message":"[INFO] GitHub Copilot detected at: /Users/cody/.vscode/extensions/github.copilot-1.317.1555","timestamp":"2025-05-12T00:42:55.296Z"}
+{"level":"info","message":"[INFO] GitHub Copilot will remain active alongside Claude/Roo - be aware of potential conflicts","timestamp":"2025-05-12T00:42:59.641Z"}
+{"level":"info","message":"[SUCCESS] Settings configured to prioritize Claude/Roo over GitHub Copilot","timestamp":"2025-05-12T00:43:03.226Z"}
+{"level":"info","message":"[SUCCESS] VS Code settings updated for AI assistants.","timestamp":"2025-05-12T00:43:03.228Z"}
+{"level":"info","message":"[SUCCESS] VS Code extensions recommendations updated.","timestamp":"2025-05-12T00:43:03.229Z"}
+{"level":"info","message":"[HEADER] Setting up Git Hooks with Claude Integration","timestamp":"2025-05-12T00:43:03.229Z"}
+{"level":"warn","message":"[WARNING] No Anthropic API key found. Claude-based Git hooks require an API key.","timestamp":"2025-05-12T00:43:03.230Z"}
+{"level":"info","message":"[INFO] Skipping Git hooks setup.","timestamp":"2025-05-12T00:43:26.751Z"}
+{"level":"info","message":"[HEADER] Setup Complete!","timestamp":"2025-05-12T00:43:26.752Z"}
