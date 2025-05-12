@@ -16,8 +16,8 @@
 #   -h             Display this help message and exit
 #
 # Examples:
-#   ./enable_control_tower_controls.sh -p thehobbyhome-admin -o ou-xxxx-xxxxxxxx
-#   ./enable_control_tower_controls.sh -p thehobbyhome-admin -o ou-xxxx-xxxxxxxx -s type2 -b comprehensive
+#   ./enable_control_tower_controls.sh -p sampleproject-admin -o ou-xxxx-xxxxxxxx
+#   ./enable_control_tower_controls.sh -p sampleproject-admin -o ou-xxxx-xxxxxxxx -s type2 -b comprehensive
 
 # Display help message
 display_help() {

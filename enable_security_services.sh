@@ -19,8 +19,8 @@
 #   -h             Display this help message and exit
 #
 # Examples:
-#   ./enable_security_services.sh -p thehobbyhome-admin -a
-#   ./enable_security_services.sh -p thehobbyhome-admin -g -s -c
+#   ./enable_security_services.sh -p sampleproject-admin -a
+#   ./enable_security_services.sh -p sampleproject-admin -g -s -c
 
 # Display help message
 display_help() {

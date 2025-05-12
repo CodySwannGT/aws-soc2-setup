@@ -19,8 +19,8 @@
 #   -h             Display this help message and exit
 #
 # Examples:
-#   ./provision_account.sh -p thehobbyhome-admin -n "Production" -e prod@example.com -o Workloads
-#   ./provision_account.sh -p thehobbyhome-admin -n "Sandbox" -e sandbox@example.com -o Sandbox -s admin@example.com -f John -l Doe
+#   ./provision_account.sh -p sampleproject-admin -n "Production" -e prod@example.com -o Workloads
+#   ./provision_account.sh -p sampleproject-admin -n "Sandbox" -e sandbox@example.com -o Sandbox -s admin@example.com -f John -l Doe
 
 # Display help message
 display_help() {

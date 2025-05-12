@@ -109,7 +109,7 @@ Run the master script with optional parameters:
 
 **Parameters:**
 - `-a ACCOUNT_ID`: Your 12-digit AWS account ID
-- `-p PROFILE`: Initial AWS CLI profile name (default: thehobbyhome)
+- `-p PROFILE`: Initial AWS CLI profile name (default: sampleproject)
 - `-r REGION`: AWS region (default: us-east-1)
 - `-h`: Display help message
 

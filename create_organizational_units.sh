@@ -17,8 +17,8 @@
 #   -h             Display this help message and exit
 #
 # Examples:
-#   ./create_organizational_units.sh -p thehobbyhome-admin -a
-#   ./create_organizational_units.sh -p thehobbyhome-admin -i -w
+#   ./create_organizational_units.sh -p sampleproject-admin -a
+#   ./create_organizational_units.sh -p sampleproject-admin -i -w
 
 # Display help message
 display_help() {

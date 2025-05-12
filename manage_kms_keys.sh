@@ -19,9 +19,9 @@
 #   -h               Display this help message and exit
 #
 # Examples:
-#   ./manage_kms_keys.sh -p thehobbyhome-admin -k 1234abcd-12ab-34cd-56ef-1234567890ab -s
-#   ./manage_kms_keys.sh -p thehobbyhome-admin -k 1234abcd-12ab-34cd-56ef-1234567890ab -a "arn:aws:iam::123456789012:role/AdminRole"
-#   ./manage_kms_keys.sh -p thehobbyhome-admin -k 1234abcd-12ab-34cd-56ef-1234567890ab -e
+#   ./manage_kms_keys.sh -p sampleproject-admin -k 1234abcd-12ab-34cd-56ef-1234567890ab -s
+#   ./manage_kms_keys.sh -p sampleproject-admin -k 1234abcd-12ab-34cd-56ef-1234567890ab -a "arn:aws:iam::123456789012:role/AdminRole"
+#   ./manage_kms_keys.sh -p sampleproject-admin -k 1234abcd-12ab-34cd-56ef-1234567890ab -e
 
 # Display help message
 display_help() {

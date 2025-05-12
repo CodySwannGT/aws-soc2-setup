@@ -29,7 +29,7 @@ echo "Thank you for using the AWS Control Tower SOC 2 Setup Script!"compliant
 #
 # Parameters:
 #   -a ACCOUNT_ID   AWS account ID (optional, will prompt if not provided)
-#   -p PROFILE      Initial AWS CLI profile name (optional, default: thehobbyhome)
+#   -p PROFILE      Initial AWS CLI profile name (optional, default: sampleproject)
 #   -r REGION       AWS region (optional, default: us-east-1)
 #   -h              Display this help message and exit
 
@@ -41,8 +41,8 @@ display_help() {
 
 # Set default values
 AWS_ACCOUNT_ID=""
-INITIAL_PROFILE="thehobbyhome"
-ADMIN_PROFILE="thehobbyhome-admin"
+INITIAL_PROFILE="sampleproject"
+ADMIN_PROFILE="sampleproject-admin"
 AWS_REGION="us-east-1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 USERS_GROUP="InitialUsers"
@@ -786,7 +786,7 @@ echo
 
 if ! check_step_completed "Custom domain configuration for IAM Identity Center" "Perform Custom domain configuration for IAM Identity Center (Conditional, Manual Step)"; then
     if prompt_yes_no "Do you want to configure a custom domain for IAM Identity Center?" "n"; then
-        read -p "Enter your domain name (e.g., thehobbyhome): " DOMAIN_NAME
+        read -p "Enter your domain name (e.g., sampleproject): " DOMAIN_NAME
         
         wait_for_manual_step "Configure Custom Domain" "
 1. Sign in to the AWS Management Console

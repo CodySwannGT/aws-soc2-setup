@@ -17,8 +17,8 @@
 #   -h                 Display this help message and exit
 #
 # Examples:
-#   ./configure_aws_backup.sh -p thehobbyhome-admin -c 111122223333 -a 444455556666
-#   ./configure_aws_backup.sh -p thehobbyhome-admin -c 111122223333 -a 444455556666 -v "SOC2-Vault" -k "arn:aws:kms:us-east-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+#   ./configure_aws_backup.sh -p sampleproject-admin -c 111122223333 -a 444455556666
+#   ./configure_aws_backup.sh -p sampleproject-admin -c 111122223333 -a 444455556666 -v "SOC2-Vault" -k "arn:aws:kms:us-east-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
 
 # Display help message
 display_help() {

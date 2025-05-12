@@ -9,12 +9,12 @@
 #   DOMAIN     Your custom domain (without https:// or /start)
 #
 # Example:
-#   ./update_sso_domain.sh thehobbyhome-admin thehobbyhome
+#   ./update_sso_domain.sh sampleproject-admin sampleproject
 
 # Check if correct number of arguments are provided
 if [ $# -ne 2 ]; then
     echo "Usage: $0 PROFILE DOMAIN"
-    echo "Example: $0 thehobbyhome-admin thehobbyhome"
+    echo "Example: $0 sampleproject-admin sampleproject"
     exit 1
 fi
 

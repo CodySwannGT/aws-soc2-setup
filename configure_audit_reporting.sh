@@ -17,8 +17,8 @@
 #   -h             Display this help message and exit
 #
 # Examples:
-#   ./configure_audit_reporting.sh -p thehobbyhome-admin -a -f
-#   ./configure_audit_reporting.sh -p thehobbyhome-admin -b audit-reports-bucket -a -f -r
+#   ./configure_audit_reporting.sh -p sampleproject-admin -a -f
+#   ./configure_audit_reporting.sh -p sampleproject-admin -b audit-reports-bucket -a -f -r
 
 # Display help message
 display_help() {

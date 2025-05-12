@@ -16,8 +16,8 @@
 #   -h                  Display this help message and exit
 #
 # Examples:
-#   ./assign_sso_permissions.sh -p thehobbyhome-admin -u admin -a 123456789012
-#   ./assign_sso_permissions.sh -p thehobbyhome-admin -u developer -a 123456789012 -r PowerUserAccess
+#   ./assign_sso_permissions.sh -p sampleproject-admin -u admin -a 123456789012
+#   ./assign_sso_permissions.sh -p sampleproject-admin -u developer -a 123456789012 -r PowerUserAccess
 
 # Display help message
 display_help() {

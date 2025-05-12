@@ -10,7 +10,7 @@
 #   ./delete_root_user_access_key.sh [-p PROFILE] [-y] [-h]
 #
 # Parameters:
-#   -p PROFILE      AWS CLI profile name (optional, default: thehobbyhome)
+#   -p PROFILE      AWS CLI profile name (optional, default: sampleproject)
 #   -y              Skip confirmation prompts (optional)
 #   -h              Display this help message and exit
 
@@ -21,7 +21,7 @@ display_help() {
 }
 
 # Set default values
-PROFILE="thehobbyhome"
+PROFILE="sampleproject"
 FORCE_YES=false
 
 # Parse command line options

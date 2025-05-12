@@ -14,7 +14,7 @@
 #   -f FIRST_NAME  First name of the user (required)
 #   -l LAST_NAME   Last name of the user (required)
 #   -e EMAIL       Work email address for the user (required)
-#   -p PROFILE     AWS CLI profile to use (default: thehobbyhome)
+#   -p PROFILE     AWS CLI profile to use (default: sampleproject)
 #   -h             Display this help message and exit
 #
 # Examples:
@@ -26,7 +26,7 @@
 #   to set the initial password for the user.
 
 # Set default values
-AWS_PROFILE="thehobbyhome"
+AWS_PROFILE="sampleproject"
 
 # Display help message
 display_help() {

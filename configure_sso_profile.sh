@@ -5,7 +5,7 @@
 # It will prompt you for:
 # 1. SSO start URL
 # 2. SSO Region 
-# 3. The profile name you want to use (e.g., thehobbyhome-admin)
+# 3. The profile name you want to use (e.g., sampleproject-admin)
 # 4. Default CLI Region
 # 5. Default output format
 aws configure sso
