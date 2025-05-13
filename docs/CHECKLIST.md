@@ -69,6 +69,7 @@ This checklist helps you track the progress of setting up your SOC 2 Compliant A
 
 ## ⑫ STEP 12: Configure Audit and Reporting
 
+*   [ ] ⏳ Perform AWS Audit Manager console setup (Required Manual Step)
 *   [ ] ⏳ Perform Audit and reporting configuration (Conditional, via `configure_audit_reporting.sh`)
 
 ## ⑬ STEP 13: Provision Additional Accounts (Optional)

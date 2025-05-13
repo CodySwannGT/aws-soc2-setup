@@ -747,9 +747,29 @@ echo
 if ! check_step_completed "Audit and reporting configuration" "Perform Audit and reporting configuration (Conditional, via \`configure_audit_reporting.sh\`)"; then
     if prompt_yes_no "Do you want to configure audit and reporting?"; then
         echo "Configuring audit and reporting..."
-        "$SCRIPT_DIR/configure_audit_reporting.sh" -p "$ADMIN_PROFILE" -a -f -r
+        
+        # First, ask about manual AWS Audit Manager setup
+        if ! check_step_completed "AWS Audit Manager console setup" "Perform AWS Audit Manager console setup (Required Manual Step)"; then
+            wait_for_manual_step "Set up AWS Audit Manager in Console" "
+1. Sign in to the AWS Management Console
+2. Navigate to AWS Audit Manager service
+3. Click on 'Get started' or 'Set up AWS Audit Manager'
+4. Accept the terms and conditions
+5. Configure the service settings in the console
+6. Complete the initial setup process
+
+IMPORTANT: AWS Audit Manager cannot be enabled entirely through the CLI without this initial console setup.
+This is explicitly stated in AWS's documentation and confirmed by the error message when trying CLI-only setup.
+"
+            update_checklist_item "Perform AWS Audit Manager console setup (Required Manual Step)" "DONE"
+        fi
+        
+        # Now run the script with the -s option to handle failures gracefully
+        echo "Running additional audit reporting configuration..."
+        "$SCRIPT_DIR/configure_audit_reporting.sh" -p "$ADMIN_PROFILE" -a -f -r -s
         update_checklist_item "Perform Audit and reporting configuration (Conditional, via \`configure_audit_reporting.sh\`)" "DONE"
     else
+        update_checklist_item "Perform AWS Audit Manager console setup (Required Manual Step)" "SKIPPED"
         update_checklist_item "Perform Audit and reporting configuration (Conditional, via \`configure_audit_reporting.sh\`)" "SKIPPED"
     fi
 fi

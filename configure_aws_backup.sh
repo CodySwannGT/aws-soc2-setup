@@ -280,36 +280,77 @@ cat > "$TEMP_BACKUP_PLAN" << EOF
 }
 EOF
 
-# Check if a backup plan with the same name already exists before attempting to create it
+# Check for existing backup plans using a more robust approach
 echo "Checking for existing backup plan..."
-BACKUP_PLAN_ID=$(aws backup list-backup-plans \
+
+# Get all backup plans
+BACKUP_PLANS_JSON=$(aws backup list-backup-plans \
     --profile "$AWS_PROFILE" \
-    --query "BackupPlansList[?BackupPlan.BackupPlanName=='SOC2-Backup-Plan'].BackupPlanId" \
-    --output text)
+    --output json)
+
+# Initialize backup plan ID as empty
+BACKUP_PLAN_ID=""
+
+# First try to find by name (case insensitive)
+BACKUP_PLAN_ID=$(echo "$BACKUP_PLANS_JSON" | \
+    jq -r '.BackupPlansList[] | select(.BackupPlan.BackupPlanName != null and (.BackupPlan.BackupPlanName | ascii_downcase) == "soc2-backup-plan") | .BackupPlanId' | head -1)
 
 if [ -z "$BACKUP_PLAN_ID" ] || [ "$BACKUP_PLAN_ID" == "None" ]; then
-    echo "  No existing backup plan found. Creating a new one..."
-    # No existing plan found, create a new one
-    BACKUP_PLAN_ID=$(aws backup create-backup-plan \
+    echo "  No backup plan found by name. Trying to create a new one..."
+    
+    # Try to create the backup plan
+    # If it fails with AlreadyExistsException, extract the existing plan ID from the error message
+    CREATE_OUTPUT=$(aws backup create-backup-plan \
         --cli-input-json file://"$TEMP_BACKUP_PLAN" \
-        --profile "$AWS_PROFILE" \
-        --query "BackupPlanId" \
-        --output text)
+        --profile "$AWS_PROFILE" 2>&1)
     
-    # Clean up
-    rm -f "$TEMP_BACKUP_PLAN"
-    
-    if [ -z "$BACKUP_PLAN_ID" ] || [ "$BACKUP_PLAN_ID" == "None" ]; then
+    # Check if the command was successful
+    if echo "$CREATE_OUTPUT" | grep -q "BackupPlanId"; then
+        # Successfully created a new plan
+        BACKUP_PLAN_ID=$(echo "$CREATE_OUTPUT" | jq -r '.BackupPlanId')
+        echo "  Successfully created backup plan with ID: $BACKUP_PLAN_ID"
+    elif echo "$CREATE_OUTPUT" | grep -q "AlreadyExistsException"; then
+        echo "  A backup plan with the same content already exists."
+        
+        # Get all backup plans again to find the one with similar rules
+        BACKUP_PLANS_DETAILED=$(aws backup list-backup-plans \
+            --profile "$AWS_PROFILE" \
+            --output json)
+        
+        # Loop through each plan ID to find one with matching rules
+        for PLAN_ID in $(echo "$BACKUP_PLANS_DETAILED" | jq -r '.BackupPlansList[].BackupPlanId'); do
+            # Get the details of this plan
+            PLAN_DETAILS=$(aws backup get-backup-plan \
+                --backup-plan-id "$PLAN_ID" \
+                --profile "$AWS_PROFILE" \
+                --output json)
+            
+            # Check if this plan has similar rules (daily and weekly backups to the same vault)
+            if echo "$PLAN_DETAILS" | jq -r '.BackupPlan.Rules | if . != null and length > 0 then .[].TargetBackupVaultName else empty end' | grep -q "$VAULT_NAME"; then
+                BACKUP_PLAN_ID="$PLAN_ID"
+                PLAN_NAME=$(echo "$PLAN_DETAILS" | jq -r '.BackupPlan.BackupPlanName')
+                echo "  Found existing backup plan: $PLAN_NAME (ID: $BACKUP_PLAN_ID)"
+                break
+            fi
+        done
+        
+        # If we still couldn't find a matching plan, exit with error
+        if [ -z "$BACKUP_PLAN_ID" ] || [ "$BACKUP_PLAN_ID" == "None" ]; then
+            echo "  ERROR: Could not identify the existing backup plan!" 1>&2
+            exit 1
+        fi
+    else
+        # Some other error occurred
         echo "  ERROR: Failed to create backup plan!" 1>&2
+        echo "$CREATE_OUTPUT" 1>&2
         exit 1
     fi
-    
-    echo "  Successfully created backup plan with ID: $BACKUP_PLAN_ID"
 else
-    # Clean up
-    rm -f "$TEMP_BACKUP_PLAN"
     echo "  Using existing backup plan with ID: $BACKUP_PLAN_ID"
 fi
+
+# Clean up
+rm -f "$TEMP_BACKUP_PLAN"
 
 # Step 3: Create a resource selection for the backup plan
 echo "Creating resource selection for backup plan..."
