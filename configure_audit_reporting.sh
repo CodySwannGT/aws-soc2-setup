@@ -4,22 +4,25 @@
 # Description:
 #   This script configures AWS Audit Manager, Config, and CloudTrail for comprehensive
 #   audit and reporting capabilities required for SOC 2 compliance.
+#   Follows AWS best practices for multi-account environments.
 #
 # Usage:
-#   ./configure_audit_reporting.sh -p PROFILE [-b BUCKET_NAME] [-a] [-f] [-r] [-s] [-h]
+#   ./configure_audit_reporting.sh -p PROFILE [-b BUCKET_NAME] [-c AUDIT_ACCOUNT_ID] [-a] [-f] [-r] [-s] [-h]
 #
 # Parameters:
-#   -p PROFILE     AWS CLI profile to use (required)
-#   -b BUCKET_NAME Name of the S3 bucket for audit reports (optional)
-#   -a             Enable AWS Audit Manager (optional)
-#   -f             Create SOC 2 framework in Audit Manager (optional)
-#   -r             Set up Config aggregator for multi-account reporting (optional)
-#   -s             Skip Audit Manager setup if it fails (optional)
-#   -h             Display this help message and exit
+#   -p PROFILE        AWS CLI profile to use (required)
+#   -b BUCKET_NAME    Name of the S3 bucket for audit reports (optional)
+#   -c AUDIT_ACCOUNT  Audit account ID for delegated admin setup (optional, recommended)
+#   -a                Enable AWS Audit Manager (optional)
+#   -f                Create SOC 2 framework in Audit Manager (optional)
+#   -r                Set up Config aggregator for multi-account reporting (optional)
+#   -s                Skip Audit Manager setup if it fails (optional)
+#   -h                Display this help message and exit
 #
 # Examples:
 #   ./configure_audit_reporting.sh -p sampleproject-admin -a -f
 #   ./configure_audit_reporting.sh -p sampleproject-admin -b audit-reports-bucket -a -f -r
+#   ./configure_audit_reporting.sh -p management-admin -c 111122223333 -a -f -r  # Best practice with Audit account
 
 # Display help message
 display_help() {
@@ -34,15 +37,21 @@ ENABLE_AUDIT_MANAGER=false
 CREATE_SOC2_FRAMEWORK=false
 SETUP_CONFIG_AGGREGATOR=false
 SKIP_AUDIT_MANAGER=false
+AUDIT_ACCOUNT_ID=""
+USE_AUDIT_ACCOUNT=false
 
 # Parse command line options
-while getopts ":p:b:afrhs" opt; do
+while getopts ":p:b:c:afrhs" opt; do
     case ${opt} in
         p )
             AWS_PROFILE=$OPTARG
             ;;
         b )
             BUCKET_NAME=$OPTARG
+            ;;
+        c )
+            AUDIT_ACCOUNT_ID=$OPTARG
+            USE_AUDIT_ACCOUNT=true
             ;;
         a )
             ENABLE_AUDIT_MANAGER=true
@@ -109,6 +118,26 @@ echo "  - AWS Profile: $AWS_PROFILE"
 echo "  - Account ID: $ACCOUNT_ID"
 echo "  - Region: $REGION"
 echo "  - Audit Reports Bucket: $BUCKET_NAME"
+
+# Check if this is the management account
+IS_MANAGEMENT_ACCOUNT=false
+if aws organizations describe-organization --profile "$AWS_PROFILE" &>/dev/null; then
+    IS_MANAGEMENT_ACCOUNT=true
+    echo "  - Running from AWS Organizations management account: Yes"
+else
+    echo "  - Running from AWS Organizations management account: No"
+fi
+
+# Display whether we're using the audit account as delegated administrator
+if [ "$USE_AUDIT_ACCOUNT" = true ]; then
+    echo "  - Audit Account ID (for delegated admin): $AUDIT_ACCOUNT_ID"
+    echo "  - Using AWS best practice: Delegated administrator in Audit account"
+else
+    if [ "$IS_MANAGEMENT_ACCOUNT" = true ]; then
+        echo "  - Using AWS best practice: No (recommended to use Audit account as delegated admin)"
+        echo "    Consider running with -c AUDIT_ACCOUNT_ID parameter for best practices"
+    fi
+fi
 echo
 
 # Create S3 bucket for audit reports
@@ -169,20 +198,77 @@ if [ "$ENABLE_AUDIT_MANAGER" = true ]; then
         echo "  AWS Audit Manager is already enabled."
         AUDIT_MANAGER_ENABLED=true
     else
-        # Step 1: First register the organization admin account
-        echo "  Step 1: Registering organization admin account..."
-        REGISTER_ERROR=$(aws auditmanager register-organization-admin-account \
-            --admin-account-id "$ACCOUNT_ID" \
-            --profile "$AWS_PROFILE" 2>&1)
+        # Step 1: Set up delegated administrator
+        echo "  Step 1: Setting up delegated administrator..."
         
-        REGISTER_RESULT=$?
-        REGISTER_SUCCESS=false
-        if [ $REGISTER_RESULT -ne 0 ]; then
-            echo "  INFO: Could not register organization admin account: $REGISTER_ERROR" 1>&2
-            echo "  This is expected if not the Organizations management account or if already registered." 1>&2
+        # Determine if we should register the audit account as delegated admin
+        if [ "$IS_MANAGEMENT_ACCOUNT" = true ] && [ "$USE_AUDIT_ACCOUNT" = true ]; then
+            # Best practice: Register the Audit account as delegated admin from Management account
+            echo "  Following AWS best practice: Setting up Audit account as delegated administrator"
+            echo "  Enabling trusted access for Audit Manager with AWS Organizations..."
+            
+            # First enable trusted access
+            TRUSTED_ACCESS=$(aws organizations enable-aws-service-access \
+                --service-principal auditmanager.amazonaws.com \
+                --profile "$AWS_PROFILE" 2>&1)
+            
+            if [ $? -ne 0 ]; then
+                echo "  INFO: Could not enable trusted access: $TRUSTED_ACCESS" 1>&2
+                echo "  This may be because trusted access is already enabled." 1>&2
+            else
+                echo "  Successfully enabled trusted access for Audit Manager with AWS Organizations."
+            fi
+            
+            # Then register the audit account as delegated admin
+            REGISTER_ERROR=$(aws organizations register-delegated-administrator \
+                --service-principal auditmanager.amazonaws.com \
+                --account-id "$AUDIT_ACCOUNT_ID" \
+                --profile "$AWS_PROFILE" 2>&1)
+            
+            REGISTER_RESULT=$?
+            REGISTER_SUCCESS=false
+            if [ $REGISTER_RESULT -ne 0 ]; then
+                echo "  INFO: Could not register audit account as delegated administrator: $REGISTER_ERROR" 1>&2
+                echo "  This is expected if already registered." 1>&2
+                
+                # Verify if the account is already a delegated administrator
+                DELEGATED_ADMIN_CHECK=$(aws organizations list-delegated-administrators \
+                    --service-principal auditmanager.amazonaws.com \
+                    --profile "$AWS_PROFILE" 2>&1)
+                
+                if echo "$DELEGATED_ADMIN_CHECK" | grep -q "$AUDIT_ACCOUNT_ID"; then
+                    echo "  Audit account $AUDIT_ACCOUNT_ID is already registered as a delegated administrator."
+                    REGISTER_SUCCESS=true
+                fi
+            else
+                echo "  Successfully registered the Audit account $AUDIT_ACCOUNT_ID as a delegated administrator for Audit Manager."
+                REGISTER_SUCCESS=true
+            fi
+            
+            echo "  IMPORTANT: Now you must complete the setup in the Audit account console."
+            echo "  - Sign in to the Audit account ($AUDIT_ACCOUNT_ID)"
+            echo "  - Navigate to AWS Audit Manager"
+            echo "  - Complete the initial setup process"
         else
-            echo "  Successfully registered the account as an organization admin account for Audit Manager."
-            REGISTER_SUCCESS=true
+            # Register the current account as admin account
+            REGISTER_ERROR=$(aws auditmanager register-organization-admin-account \
+                --admin-account-id "$ACCOUNT_ID" \
+                --profile "$AWS_PROFILE" 2>&1)
+            
+            REGISTER_RESULT=$?
+            REGISTER_SUCCESS=false
+            if [ $REGISTER_RESULT -ne 0 ]; then
+                echo "  INFO: Could not register organization admin account: $REGISTER_ERROR" 1>&2
+                echo "  This is expected if not the Organizations management account or if already registered." 1>&2
+                
+                if [ "$IS_MANAGEMENT_ACCOUNT" = true ] && [ "$USE_AUDIT_ACCOUNT" = false ]; then
+                    echo "  NOTE: AWS best practice recommends using the Audit account as delegated administrator"
+                    echo "  Consider running the script with -c AUDIT_ACCOUNT_ID parameter"
+                fi
+            else
+                echo "  Successfully registered the account as an organization admin account for Audit Manager."
+                REGISTER_SUCCESS=true
+            fi
         fi
         
         # Step 2: Configure Audit Manager settings

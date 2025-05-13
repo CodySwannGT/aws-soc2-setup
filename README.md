@@ -54,6 +54,10 @@ SOC 2 audits examine your environment's historical compliance. Starting with a c
 
 AWS recommends a multi-account strategy for security isolation, but configuring this properly is complex. This suite handles the intricacies of account relationships, permissions, and security service configurations automatically.
 
+### Enhanced Security for Root Accounts
+
+The suite automatically disables console access for root users in sub-accounts, following AWS best practices for security. This critical protection helps prevent unauthorized access to your most privileged accounts and satisfies SOC 2 requirements for privileged access management.
+
 ### Reduce Cloud Security Expertise Requirements
 
 Not everyone on your team may be an AWS security expert. This suite codifies best practices and provides clear, actionable guidance throughout the process.
@@ -104,18 +108,19 @@ By incorporating AI-powered tools, this project aims to boost productivity and m
 Run the master script with optional parameters:
 
 ```bash
-./master_control_tower_setup.sh [-a ACCOUNT_ID] [-p PROFILE] [-r REGION] [-h]
+./master_control_tower_setup.sh [-a ACCOUNT_ID] [-p PROFILE] [-d ADMIN_PROFILE] [-r REGION] [-h]
 ```
 
 **Parameters:**
 - `-a ACCOUNT_ID`: Your 12-digit AWS account ID
 - `-p PROFILE`: Initial AWS CLI profile name (default: sampleproject)
+- `-d ADMIN_PROFILE`: Admin AWS CLI profile name (default: thehobbyhome-management)
 - `-r REGION`: AWS region (default: us-east-1)
 - `-h`: Display help message
 
 **Example:**
 ```bash
-./master_control_tower_setup.sh -a 123456789012 -r us-west-2
+./master_control_tower_setup.sh -a 123456789012 -d my-admin-profile -r us-west-2
 ```
 
 ## 📊 Setup Process Details
@@ -158,6 +163,14 @@ The setup process follows these key steps, each designed to implement specific S
 **What it does:** Activates essential security services like GuardDuty, Security Hub, Config, Macie, and Inspector.  
 **Why it matters:** Implements required security monitoring, detection, and compliance validation services.
 
+### 10. Provision Additional Accounts
+**What it does:** Creates and configures additional AWS accounts through Control Tower Account Factory with automated enrollment completion tracking.  
+**Why it matters:** Simplifies the account creation process and ensures all accounts are properly configured and monitored.
+
+### 11. Disable Root User Console Access
+**What it does:** Removes root user credentials from all sub-accounts and configures the organization to create new accounts without root credentials by default.  
+**Why it matters:** Critical security measure that prevents unauthorized access to the most privileged account in each sub-account, satisfying SOC 2 privileged access requirements.
+
 ## 🔧 Advanced Configuration
 
 ### Customizing Organizational Units
@@ -183,6 +196,12 @@ For organizations requiring additional preventative or detective guardrails:
 
 ### Root Access Keys
 Root user access keys are temporarily created and deleted as part of the setup process. If the process is interrupted, ensure these are manually deleted.
+
+### Root Console Access in Sub-accounts
+The suite automatically disables console access for root users in all sub-accounts, following AWS security best practices. This ensures that your most privileged accounts can't be compromised, even if credentials are leaked.
+
+### Security Services for New Accounts
+When provisioning new accounts via Account Factory, be aware that security services (GuardDuty, Security Hub, Config, etc.) are not automatically enabled on these accounts. After creating new accounts, you should re-run the security service enablement script for each new account to ensure comprehensive security coverage.
 
 ### Audit Logs
 Control Tower automatically enables CloudTrail in the Audit account. Consider additional configurations for log retention and analysis.

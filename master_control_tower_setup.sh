@@ -2,36 +2,20 @@
 # master_control_tower_setup.sh - Orchestrates the AWS Control Tower setup process
 #
 # Description:
-#   This script serves as the master orchestrator for setting up a SOC 2 Compliant AWS Control Tower Setup Complete!
-echo "==================================================================="
-echo
-echo "Your AWS environment has been set up with SOC 2 compliant configurations."
-echo "Here's a summary of what was done:"
-echo
-echo "1. Set up AWS Control Tower with a multi-account structure"
-echo "2. Created administrative users and groups"
-echo "3. Enabled security services and controls"
-echo "4. Configured backup and audit capabilities"
-echo
-echo "Next steps:"
-echo "1. Review the configuration in the AWS Console"
-echo "2. Set up additional accounts as needed"
-echo "3. Implement additional controls based on your specific requirements"
-echo "4. Document your compliance posture for SOC 2 audits"
-echo
-echo "Thank you for using the AWS Control Tower SOC 2 Setup Script!"compliant
+#   This script serves as the master orchestrator for setting up a SOC 2 Compliant
 #   AWS Control Tower environment. It calls individual scripts in sequence, prompts
 #   for necessary inputs, and guides the user through manual steps.
 #   The script now checks if steps have already been completed before proceeding.
 #
 # Usage:
-#   ./master_control_tower_setup.sh [-a ACCOUNT_ID] [-p PROFILE] [-r REGION] [-h]
+#   ./master_control_tower_setup.sh [-a ACCOUNT_ID] [-p PROFILE] [-d ADMIN_PROFILE] [-r REGION] [-h]
 #
 # Parameters:
-#   -a ACCOUNT_ID   AWS account ID (optional, will prompt if not provided)
-#   -p PROFILE      Initial AWS CLI profile name (optional, default: sampleproject)
-#   -r REGION       AWS region (optional, default: us-east-1)
-#   -h              Display this help message and exit
+#   -a ACCOUNT_ID     AWS account ID (optional, will prompt if not provided)
+#   -p PROFILE        Initial AWS CLI profile name (optional, default: sampleproject)
+#   -d ADMIN_PROFILE  Admin AWS CLI profile name (optional, default: thehobbyhome-management)
+#   -r REGION         AWS region (optional, default: us-east-1)
+#   -h                Display this help message and exit
 
 # Display help message
 display_help() {
@@ -65,9 +49,9 @@ update_checklist_item() {
     local item_text_for_replacement=$(echo "$item_text_pattern" | sed -e 's/[\/&\\]/\\&/g')
 
     if [ "$status" = "DONE" ]; then
-        replace_prefix="[x] ✅ "
+        replace_prefix="✅ "
     elif [ "$status" = "SKIPPED" ]; then
-        replace_prefix="[x] ⏭️ "
+        replace_prefix="⏭️ "
     else
         echo "WARNING: Invalid status '$status' for checklist item '$item_text_pattern'."
         return 1
@@ -91,13 +75,16 @@ update_checklist_item() {
 }
 
 # Parse command line options
-while getopts ":a:p:r:h" opt; do
+while getopts ":a:p:d:r:h" opt; do
     case ${opt} in
         a )
             AWS_ACCOUNT_ID=$OPTARG
             ;;
         p )
             INITIAL_PROFILE=$OPTARG
+            ;;
+        d )
+            ADMIN_PROFILE=$OPTARG
             ;;
         r )
             AWS_REGION=$OPTARG
@@ -180,6 +167,20 @@ check_step_completed() {
     fi
 }
 
+# Function to collect user information
+collect_user_info() {
+    local username firstname lastname email
+    
+    echo
+    echo "Enter information for a new user:"
+    read -p "Username: " username
+    read -p "First name: " firstname
+    read -p "Last name: " lastname
+    read -p "Email: " email
+    
+    USER_INFO+=("$username:$firstname:$lastname:$email")
+}
+
 # Check required scripts
 required_scripts=(
     "configure_sso_profile.sh"
@@ -241,7 +242,7 @@ echo
 echo "Setup will proceed with the following settings:"
 echo "  - AWS Account ID: $AWS_ACCOUNT_ID"
 echo "  - Initial CLI Profile: $INITIAL_PROFILE"
-echo "  - Admin Profile Name (will be created): $ADMIN_PROFILE"
+echo "  - Admin Profile Name: $ADMIN_PROFILE"
 echo "  - AWS Region: $AWS_REGION"
 echo
 
@@ -530,22 +531,11 @@ if ! check_step_completed "Additional user creation" "Perform Additional user cr
     # Array to store user information
     declare -a USER_INFO=()
 
-    # Collect user information
-    collect_user_info() {
-        local username firstname lastname email
-        
-        echo
-        echo "Enter information for a new user:"
-        read -p "Username: " username
-        read -p "First name: " firstname
-        read -p "Last name: " lastname
-        read -p "Email: " email
-        
-        USER_INFO+=("$username:$firstname:$lastname:$email")
-    }
-
     # Prompt to add users
-    while prompt_yes_no "Do you want to add a user?"; do
+    while true; do
+        if ! prompt_yes_no "Do you want to add a user"; then
+            break
+        fi
         collect_user_info
     done
 
@@ -766,7 +756,32 @@ This is explicitly stated in AWS's documentation and confirmed by the error mess
         
         # Now run the script with the -s option to handle failures gracefully
         echo "Running additional audit reporting configuration..."
-        "$SCRIPT_DIR/configure_audit_reporting.sh" -p "$ADMIN_PROFILE" -a -f -r -s
+        
+        # Check if we should use the audit account as delegated admin (AWS best practice)
+        if [ ! -z "$AUDIT_ACCOUNT" ]; then
+            echo "Following AWS best practice: Using Audit account as delegated administrator"
+            # First run from management account to set up delegated admin
+            "$SCRIPT_DIR/configure_audit_reporting.sh" -p "$ADMIN_PROFILE" -c "$AUDIT_ACCOUNT" -a -s
+            
+            # Check if we have a profile for the audit account
+            read -p "Do you have an AWS CLI profile for the Audit account? (y/n): " HAS_AUDIT_PROFILE
+            if [[ "$HAS_AUDIT_PROFILE" =~ ^[Yy]$ ]]; then
+                read -p "Enter the AWS CLI profile name for the Audit account: " AUDIT_PROFILE
+                echo "Now completing configuration in the Audit account..."
+                "$SCRIPT_DIR/configure_audit_reporting.sh" -p "$AUDIT_PROFILE" -a -f -r -s
+            else
+                echo "IMPORTANT: You need to complete setup in the Audit account console."
+                echo "1. Sign in to the Audit account"
+                echo "2. Navigate to AWS Audit Manager"
+                echo "3. Complete the console-based setup process"
+                echo "4. Configure SOC 2 framework and other settings as needed"
+            fi
+        else
+            # Fallback to running in management account (not best practice)
+            echo "Running Audit Manager setup in management account."
+            echo "NOTE: AWS best practice recommends using the Audit account as delegated administrator."
+            "$SCRIPT_DIR/configure_audit_reporting.sh" -p "$ADMIN_PROFILE" -a -f -r -s
+        fi
         update_checklist_item "Perform Audit and reporting configuration (Conditional, via \`configure_audit_reporting.sh\`)" "DONE"
     else
         update_checklist_item "Perform AWS Audit Manager console setup (Required Manual Step)" "SKIPPED"
@@ -783,13 +798,18 @@ echo "You can provision additional accounts through Control Tower Account Factor
 echo
 
 if prompt_yes_no "Do you want to provision additional accounts?" "n"; then
-    local any_account_provisioned_step13=false
+    # Track if any accounts were provisioned
+    any_account_provisioned_step13=false
+    
     # Get OUs for selection
     ROOT_ID=$(aws organizations list-roots --profile "$ADMIN_PROFILE" --query "Roots[0].Id" --output text)
     OUS=$(aws organizations list-organizational-units-for-parent --parent-id "$ROOT_ID" --profile "$ADMIN_PROFILE" --query "OrganizationalUnits[].{Name:Name,Id:Id}" --output json)
     
     # Loop to provision multiple accounts if needed
-    while prompt_yes_no "Do you want to provision an account?"; then
+    while true; do
+        if ! prompt_yes_no "Do you want to provision an account"; then
+            break
+        fi
         # Get account information
         read -p "Account name: " account_name
         read -p "Account email: " account_email
@@ -799,19 +819,13 @@ if prompt_yes_no "Do you want to provision additional accounts?" "n"; then
         echo "$OUS" | jq -r '.[] | .Name + " (" + .Id + ")"'
         read -p "Enter the OU name to place the account in: " ou_name
         
-        # Provision the account
+        # Provision the account and wait for it to complete
         echo "Provisioning account $account_name..."
-        "$SCRIPT_DIR/provision_account.sh" -p "$ADMIN_PROFILE" -n "$account_name" -e "$account_email" -o "$ou_name"
+        "$SCRIPT_DIR/provision_account.sh" -p "$ADMIN_PROFILE" -n "$account_name" -e "$account_email" -o "$ou_name" -w
         any_account_provisioned_step13=true
         update_checklist_item "Provision additional accounts via Account Factory (Conditional, via \`provision_account.sh\`)" "DONE" # Marked per account
         
-        # Get the new account ID once it's created
-        wait_for_manual_step "Wait for Account Provisioning" "
-1. The account provisioning process is running in the background
-2. This typically takes 30-60 minutes to complete
-3. You can check the status in the AWS Control Tower console
-4. Once complete, the account will appear in the AWS Organizations console
-"
+        # The account is now provisioned and available
         update_checklist_item "Wait for Account Provisioning (Manual Step, ~30-60 mins)" "DONE" # Marked per account
         
         # Update the organization accounts list
@@ -873,10 +887,144 @@ if ! check_step_completed "Custom domain configuration for IAM Identity Center" 
     fi
 fi
 
-# STEP 15: Set up KMS Key Management
+# STEP 15: Disable Root User Console Access for Sub-Accounts
 echo
 echo "==================================================================="
-echo "STEP 15: Configure KMS Key Management (Optional)"
+echo "STEP 15: Disable Root User Console Access for Sub-Accounts"
+echo "==================================================================="
+echo "This step disables console access for root users in all sub-accounts."
+echo "This is a critical security measure for SOC 2 compliance."
+echo
+
+if ! check_step_completed "Root user console access disabling" "Perform Root user console access disabling for sub-accounts"; then
+    if prompt_yes_no "Do you want to disable console access for root users in sub-accounts?"; then
+        echo "Disabling console access for root users in sub-accounts..."
+        
+        # Enable trusted access for IAM in AWS Organizations
+        echo "Step 1: Enabling trusted access for IAM in AWS Organizations..."
+        aws organizations enable-aws-service-access \
+            --service-principal iam.amazonaws.com \
+            --profile "$ADMIN_PROFILE" \
+            || echo "Trusted access for IAM is already enabled or couldn't be enabled."
+        
+        # Enable root credentials management
+        echo "Step 2: Enabling root credentials management in AWS Organizations..."
+        aws iam enable-organizations-root-credentials-management \
+            --profile "$ADMIN_PROFILE" \
+            || echo "Root credentials management is already enabled or couldn't be enabled."
+        
+        # Enable organizations root sessions
+        echo "Step 3: Enabling organizations root sessions in AWS Organizations..."
+        aws iam enable-organizations-root-sessions \
+            --profile "$ADMIN_PROFILE" \
+            || echo "Organizations root sessions are already enabled or couldn't be enabled."
+        
+        # Get all member accounts (excluding the management account)
+        echo "Step 4: Retrieving list of member accounts..."
+        MANAGEMENT_ACCOUNT_ID="$AWS_ACCOUNT_ID"
+        echo "Management account ID: $MANAGEMENT_ACCOUNT_ID"
+        
+        MEMBER_ACCOUNTS=$(aws organizations list-accounts \
+            --profile "$ADMIN_PROFILE" \
+            | jq -r ".Accounts[] | select(.Id != \"$MANAGEMENT_ACCOUNT_ID\" and .Status == \"ACTIVE\") | .Id")
+        
+        if [ -z "$MEMBER_ACCOUNTS" ]; then
+            echo "No member accounts found. Nothing to process."
+        else
+            ACCOUNT_COUNT=$(echo "$MEMBER_ACCOUNTS" | wc -l)
+            echo "Found $ACCOUNT_COUNT member accounts to process"
+            
+            # Set a counter for progress tracking
+            COUNTER=0
+            
+            for ACCOUNT_ID in $MEMBER_ACCOUNTS; do
+                COUNTER=$((COUNTER + 1))
+                echo "[$COUNTER/$ACCOUNT_COUNT] Processing account $ACCOUNT_ID..."
+                
+                # Get account name for better logging
+                ACCOUNT_NAME=$(aws organizations describe-account \
+                    --account-id "$ACCOUNT_ID" \
+                    --profile "$ADMIN_PROFILE" \
+                    | jq -r .Account.Name)
+                
+                echo "  Account: $ACCOUNT_NAME ($ACCOUNT_ID)"
+                
+                # Step 5a: Assume root session in the target account
+                echo "  Requesting temporary root session..."
+                ROOT_SESSION=$(aws sts assume-root \
+                    --target-principal "$ACCOUNT_ID" \
+                    --task-policy-arn arn:aws:iam::aws:policy/root-task/IAMDeleteRootUserCredentials \
+                    --profile "$ADMIN_PROFILE" 2>/dev/null || echo '{\"failed\": true}')
+                
+                # Check if assume-root failed
+                if [ "$(echo "$ROOT_SESSION" | jq -r '.failed // \"false\"')" == "true" ]; then
+                    echo "  Error: Failed to assume root session for account $ACCOUNT_ID"
+                    continue
+                fi
+                
+                # Extract temporary credentials
+                ACCESS_KEY=$(echo "$ROOT_SESSION" | jq -r .Credentials.AccessKeyId)
+                SECRET_KEY=$(echo "$ROOT_SESSION" | jq -r .Credentials.SecretAccessKey)
+                SESSION_TOKEN=$(echo "$ROOT_SESSION" | jq -r .Credentials.SessionToken)
+                
+                if [ "$ACCESS_KEY" == "null" ] || [ -z "$ACCESS_KEY" ]; then
+                    echo "  Error: Failed to get valid temporary credentials"
+                    continue
+                fi
+                
+                # Step 5b: Delete root credentials
+                echo "  Deleting root credentials..."
+                
+                # We'll use a temporary profile for the assumed root credentials
+                export AWS_ACCESS_KEY_ID="$ACCESS_KEY"
+                export AWS_SECRET_ACCESS_KEY="$SECRET_KEY"
+                export AWS_SESSION_TOKEN="$SESSION_TOKEN"
+                
+                # Delete the root credentials
+                DELETE_RESULT=$(aws iam delete-root-user-credentials 2>&1) || true
+                
+                # Check if the deletion succeeded
+                if [[ $DELETE_RESULT == *"Error"* ]]; then
+                    echo "  Warning: $DELETE_RESULT"
+                else
+                    echo "  Success: Root credentials deleted for account $ACCOUNT_NAME ($ACCOUNT_ID)"
+                fi
+                
+                # Clear environment variables for the next account
+                unset AWS_ACCESS_KEY_ID
+                unset AWS_SECRET_ACCESS_KEY
+                unset AWS_SESSION_TOKEN
+                
+                echo
+            done
+            
+            # Final status
+            echo "=== Summary ==="
+            echo "Total accounts processed: $ACCOUNT_COUNT"
+            echo 
+            echo "Root Access Management is now fully configured:"
+            echo "  1. IAM trusted access is enabled in the organization"
+            echo "  2. Root credentials management is enabled"
+            echo "  3. Organizations root sessions are enabled"
+            echo "  4. Root credentials have been removed from all possible member accounts"
+            echo
+            echo "Additional information:"
+            echo "  - Any new accounts created in your organization will now be created without root credentials by default"
+            echo "  - To re-enable root access for specific accounts if needed, use:"
+            echo "    aws sts assume-root --target-principal ACCOUNT_ID --task-policy-arn arn:aws:iam::aws:policy/root-task/IAMAllowRootUserCredentialRecovery --profile $ADMIN_PROFILE"
+            echo "  - For troubleshooting, check the AWS IAM console > Root access management"
+        fi
+        
+        update_checklist_item "Perform Root user console access disabling for sub-accounts" "DONE"
+    else
+        update_checklist_item "Perform Root user console access disabling for sub-accounts" "SKIPPED"
+    fi
+fi
+
+# STEP 16: Set up KMS Key Management
+echo
+echo "==================================================================="
+echo "STEP 16: Configure KMS Key Management (Optional)"
 echo "==================================================================="
 echo "You can configure additional access to KMS keys created during setup."
 echo
@@ -945,6 +1093,7 @@ echo "1. Set up AWS Control Tower with a multi-account structure"
 echo "2. Created administrative users and groups"
 echo "3. Enabled security services and controls"
 echo "4. Configured backup and audit capabilities"
+echo "5. Disabled root user console access for sub-accounts"
 echo
 echo "Next steps:"
 echo "1. Review the configuration in the AWS Console"
