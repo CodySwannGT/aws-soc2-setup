@@ -11,32 +11,32 @@ This checklist helps you track the progress of setting up your SOC 2 Compliant A
 
 ## 📝 Initial Configuration
 
-*   [ ] ⏳ Provide AWS Account ID
-*   [ ] ⏳ Confirm Setup Settings
+*   [x] ✅ Provide AWS Account ID
+*   [x] ✅ Confirm Setup Settings
 
 ## 1️⃣ STEP 1: Initial AWS CLI Profile Setup
 
-*   [ ] ⏳ Perform Initial AWS CLI profile setup (Root User Access Keys & `aws configure`)
+*   [x] ⏳ Perform Initial AWS CLI profile setup (Root User Access Keys & `aws configure`)
 
 ## 2️⃣ STEP 2: Enable MFA for Root User
 
-*   [ ] ⏳ Perform MFA setup for root user (Manual Step)
+*   [x] ⏳ Perform MFA setup for root user (Manual Step)
 
 ## 3️⃣ STEP 3: Enable IAM Identity Center
 
-*   [ ] ⏳ Perform IAM Identity Center setup (Manual Step)
+*   [x] ⏳ Perform IAM Identity Center setup (Manual Step)
 
 ## 4️⃣ STEP 4: Set up AWS Control Tower
 
-*   [ ] ⏳ Perform AWS Control Tower setup (Manual Step, ~30-60 mins)
-*   [ ] ⏳ Verify Control Tower setup completion
+*   [x] ⏳ Perform AWS Control Tower setup (Manual Step, ~30-60 mins)
+*   [x] ✅ Verify Control Tower setup completion
 
 ## 5️⃣ STEP 5: Create Admin User & Configure Access
 
-*   [ ] ⏳ Perform Admin user creation in IAM Identity Center (via `create_sso_user.sh`)
-*   [ ] ⏳ Set Admin User Password (Manual Step in IAM Identity Center)
-*   [ ] ⏳ Perform Administrator access assignment to admin user for management account (via `assign_sso_permissions.sh`)
-*   [ ] ⏳ Perform SSO profile configuration for admin user (Manual Step: `aws configure sso`)
+*   [x] ⏳ Perform Admin user creation in IAM Identity Center (via `create_sso_user.sh`)
+*   [x] ⏳ Set Admin User Password (Manual Step in IAM Identity Center)
+*   [x] ⏳ Perform Administrator access assignment to admin user for management account (via `assign_sso_permissions.sh`)
+*   [x] ⏳ Perform SSO profile configuration for admin user (Manual Step: `aws configure sso`)
 *   [ ] ⏳ Perform Root user access key deletion (via `delete_root_user_access_key.sh`)
 
 ## 6️⃣ STEP 6: Create IAM Identity Center Group for Initial Users

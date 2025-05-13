@@ -173,12 +173,28 @@ EOF
     
     # Create an alias for the key
     KMS_KEY_ID=$(echo "$KMS_KEY" | sed 's/.*key\///')
-    aws kms create-alias \
-        --alias-name "alias/aws-backup-soc2" \
-        --target-key-id "$KMS_KEY_ID" \
-        --profile "$AWS_PROFILE" > /dev/null
     
-    echo "Created new KMS key: $KMS_KEY"
+    # Check if the alias already exists
+    EXISTING_ALIAS=$(aws kms list-aliases \
+        --query "Aliases[?AliasName=='alias/aws-backup-soc2'].AliasName" \
+        --profile "$AWS_PROFILE" \
+        --output text)
+    
+    if [ -z "$EXISTING_ALIAS" ] || [ "$EXISTING_ALIAS" == "None" ]; then
+        # Alias doesn't exist, create it
+        if aws kms create-alias \
+            --alias-name "alias/aws-backup-soc2" \
+            --target-key-id "$KMS_KEY_ID" \
+            --profile "$AWS_PROFILE" 2>/dev/null; then
+            echo "Created new alias 'alias/aws-backup-soc2' for KMS key"
+        else
+            echo "  WARNING: Failed to create KMS alias. It might already exist." 1>&2
+        fi
+    else
+        echo "Using existing KMS alias: $EXISTING_ALIAS"
+    fi
+    
+    echo "Using KMS key: $KMS_KEY"
     echo
 fi
 
@@ -264,21 +280,36 @@ cat > "$TEMP_BACKUP_PLAN" << EOF
 }
 EOF
 
-BACKUP_PLAN_ID=$(aws backup create-backup-plan \
-    --cli-input-json file://"$TEMP_BACKUP_PLAN" \
+# Check if a backup plan with the same name already exists before attempting to create it
+echo "Checking for existing backup plan..."
+BACKUP_PLAN_ID=$(aws backup list-backup-plans \
     --profile "$AWS_PROFILE" \
-    --query "BackupPlanId" \
+    --query "BackupPlansList[?BackupPlan.BackupPlanName=='SOC2-Backup-Plan'].BackupPlanId" \
     --output text)
 
-# Clean up
-rm -f "$TEMP_BACKUP_PLAN"
-
 if [ -z "$BACKUP_PLAN_ID" ] || [ "$BACKUP_PLAN_ID" == "None" ]; then
-    echo "  ERROR: Failed to create backup plan!" 1>&2
-    exit 1
+    echo "  No existing backup plan found. Creating a new one..."
+    # No existing plan found, create a new one
+    BACKUP_PLAN_ID=$(aws backup create-backup-plan \
+        --cli-input-json file://"$TEMP_BACKUP_PLAN" \
+        --profile "$AWS_PROFILE" \
+        --query "BackupPlanId" \
+        --output text)
+    
+    # Clean up
+    rm -f "$TEMP_BACKUP_PLAN"
+    
+    if [ -z "$BACKUP_PLAN_ID" ] || [ "$BACKUP_PLAN_ID" == "None" ]; then
+        echo "  ERROR: Failed to create backup plan!" 1>&2
+        exit 1
+    fi
+    
+    echo "  Successfully created backup plan with ID: $BACKUP_PLAN_ID"
+else
+    # Clean up
+    rm -f "$TEMP_BACKUP_PLAN"
+    echo "  Using existing backup plan with ID: $BACKUP_PLAN_ID"
 fi
-
-echo "  Successfully created backup plan with ID: $BACKUP_PLAN_ID"
 
 # Step 3: Create a resource selection for the backup plan
 echo "Creating resource selection for backup plan..."
@@ -288,16 +319,18 @@ TEMP_SELECTION=$(mktemp)
 
 cat > "$TEMP_SELECTION" << EOF
 {
-  "SelectionName": "SOC2-Resources",
-  "IamRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/service-role/AWSBackupDefaultServiceRole",
-  "Resources": ["*"],
-  "ListOfTags": [
-    {
-      "ConditionType": "STRINGEQUALS",
-      "ConditionKey": "Backup",
-      "ConditionValue": "true"
-    }
-  ]
+  "BackupSelection": {
+    "SelectionName": "SOC2-Resources",
+    "IamRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/service-role/AWSBackupDefaultServiceRole",
+    "Resources": ["*"],
+    "ListOfTags": [
+      {
+        "ConditionType": "STRINGEQUALS",
+        "ConditionKey": "Backup",
+        "ConditionValue": "true"
+      }
+    ]
+  }
 }
 EOF
 

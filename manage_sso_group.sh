@@ -13,13 +13,13 @@
 #   -g GROUP_NAME   Name of the group to create or manage (required)
 #   -d DESCRIPTION  Description for the group (optional)
 #   -a ACCOUNT_ID   AWS account ID to grant access to (optional)
-#   -r PERMISSION   Permission set name to assign (optional, default: "AdministratorAccess")
+#   -r PERMISSION   Permission set name to assign (optional, default: "AWSAdministratorAccess")
 #   -u USERS        Space-separated list of usernames to add to the group (optional)
 #   -h              Display this help message and exit
 #
 # Examples:
 #   ./manage_sso_group.sh -p admin-profile -g AdminGroup -d "Administrators Group"
-#   ./manage_sso_group.sh -p admin-profile -g AdminGroup -a 123456789012 -r AdministratorAccess
+#   ./manage_sso_group.sh -p admin-profile -g AdminGroup -a 123456789012 -r AWSAdministratorAccess
 #   ./manage_sso_group.sh -p admin-profile -g AdminGroup -u "user1 user2 user3"
 
 # Display help message
@@ -33,7 +33,7 @@ AWS_PROFILE=""
 GROUP_NAME=""
 DESCRIPTION=""
 ACCOUNT_ID=""
-PERMISSION_SET="AdministratorAccess"
+PERMISSION_SET="AWSAdministratorAccess"
 USERS=""
 
 # Parse command line options

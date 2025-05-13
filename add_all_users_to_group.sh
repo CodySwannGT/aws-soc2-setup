@@ -14,12 +14,12 @@
 #   -c              Create the group if it doesn't exist (optional)
 #   -d DESCRIPTION  Description for the group if creating it (optional, default: "Group created by script")
 #   -a ACCOUNTS     Space-separated list of account IDs to grant access to, in quotes (optional)
-#   -r PERMISSION   Permission set name to assign (optional, default: "AdministratorAccess")
+#   -r PERMISSION   Permission set name to assign (optional, default: "AWSAdministratorAccess")
 #   -h              Display this help message and exit
 #
 # Examples:
 #   ./add_all_users_to_group.sh -p admin-profile -g AdminGroup -c -d "Administrators Group"
-#   ./add_all_users_to_group.sh -p admin-profile -g AdminGroup -a "123456789012 234567890123" -r AdministratorAccess
+#   ./add_all_users_to_group.sh -p admin-profile -g AdminGroup -a "123456789012 234567890123" -r AWSAdministratorAccess
 
 # Display help message
 display_help() {
@@ -33,7 +33,7 @@ GROUP_NAME=""
 CREATE_GROUP=false
 DESCRIPTION="Group created by add_all_users_to_group.sh script"
 ACCOUNTS=""
-PERMISSION_SET="AdministratorAccess"
+PERMISSION_SET="AWSAdministratorAccess"
 
 # Parse command line options
 while getopts ":p:g:cd:a:r:h" opt; do

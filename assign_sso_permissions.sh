@@ -2,7 +2,7 @@
 # assign_sso_permissions.sh - Assign permission sets to users in IAM Identity Center
 #
 # Description:
-#   This script assigns permission sets (like AdministratorAccess) to users in
+#   This script assigns permission sets (like AWSAdministratorAccess) to users in
 #   IAM Identity Center across specific AWS accounts.
 #
 # Usage:
@@ -12,7 +12,7 @@
 #   -p PROFILE          AWS CLI profile to use (required)
 #   -u USERNAME         IAM Identity Center username to assign permissions to (required)
 #   -a ACCOUNT_ID       AWS account ID to grant access to (required)
-#   -r PERMISSION_SET   Permission set name to assign (default: "AdministratorAccess")
+#   -r PERMISSION_SET   Permission set name to assign (default: "AWSAdministratorAccess")
 #   -h                  Display this help message and exit
 #
 # Examples:
@@ -29,7 +29,7 @@ display_help() {
 AWS_PROFILE=""
 USERNAME=""
 ACCOUNT_ID=""
-PERMISSION_SET="AdministratorAccess"
+PERMISSION_SET="AWSAdministratorAccess"
 
 # Parse command line options
 while getopts ":p:u:a:r:h" opt; do

@@ -42,7 +42,7 @@ display_help() {
 # Set default values
 AWS_ACCOUNT_ID=""
 INITIAL_PROFILE="sampleproject"
-ADMIN_PROFILE="sampleproject-admin"
+ADMIN_PROFILE="thehobbyhome-management"
 AWS_REGION="us-east-1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 USERS_GROUP="InitialUsers"
@@ -365,8 +365,17 @@ You'll receive an email when it's done.
 update_checklist_item "Perform AWS Control Tower setup (Manual Step, ~30-60 mins)" "DONE"
 fi
 
+# Determine which profile to use for AWS API calls
+# If root user access keys have been deleted, use ADMIN_PROFILE
+# Otherwise, use INITIAL_PROFILE
+ACTIVE_PROFILE="$INITIAL_PROFILE"
+if check_step_completed "Root user access key deletion" "Perform Root user access key deletion (via \`delete_root_user_access_key.sh\`)"; then
+    echo "Root user access keys have been deleted, using admin profile for API calls..."
+    ACTIVE_PROFILE="$ADMIN_PROFILE"
+fi
+
 # Check if Control Tower is actually set up
-aws controltower describe-landing-zone --profile "$INITIAL_PROFILE" > /dev/null 2>&1
+aws controltower list-landing-zones --profile "$ACTIVE_PROFILE" > /dev/null 2>&1
 if [ $? -ne 0 ]; then
     echo "WARNING: AWS Control Tower doesn't appear to be fully set up yet."
     if ! prompt_yes_no "Are you sure AWS Control Tower setup is complete?"; then
@@ -406,8 +415,8 @@ if ! check_step_completed "Admin user creation in IAM Identity Center" "Perform 
     done
 
     # Create the admin user
-    echo "Creating admin user..."
-    "$SCRIPT_DIR/create_sso_user.sh" -p "$INITIAL_PROFILE" -u "$admin_username" -f "$admin_firstname" -l "$admin_lastname" -e "$admin_email"
+    echo "Creating admin user using $ACTIVE_PROFILE profile..."
+    "$SCRIPT_DIR/create_sso_user.sh" -p "$ACTIVE_PROFILE" -u "$admin_username" -f "$admin_firstname" -l "$admin_lastname" -e "$admin_email"
     update_checklist_item "Perform Admin user creation in IAM Identity Center (via \`create_sso_user.sh\`)" "DONE"
 
     wait_for_manual_step "Set Admin User Password" "
@@ -425,9 +434,11 @@ else
     admin_username=${admin_username:-"admin"}
 fi
 
+# Note: ACTIVE_PROFILE is already defined above
+
 # Get Account IDs created by Control Tower
-echo "Retrieving AWS Organization accounts..."
-ORG_ACCOUNTS=$(aws organizations list-accounts --profile "$INITIAL_PROFILE" --query "Accounts[?Status=='ACTIVE'].{ID:Id,Name:Name}" --output json)
+echo "Retrieving AWS Organization accounts using $ACTIVE_PROFILE profile..."
+ORG_ACCOUNTS=$(aws organizations list-accounts --profile "$ACTIVE_PROFILE" --query "Accounts[?Status=='ACTIVE'].{ID:Id,Name:Name}" --output json)
 
 if [ -z "$ORG_ACCOUNTS" ]; then
     echo "ERROR: No accounts found in the organization. Make sure Control Tower setup is complete." 1>&2
@@ -447,8 +458,8 @@ echo "Audit account ID: $AUDIT_ACCOUNT"
 
 # Assign admin permissions to the admin user for all accounts
 if ! check_step_completed "Administrator access assignment to admin user" "Perform Administrator access assignment to admin user for management account (via \`assign_sso_permissions.sh\`)"; then
-    echo "Assigning administrator access to $admin_username for management account..."
-    "$SCRIPT_DIR/assign_sso_permissions.sh" -p "$INITIAL_PROFILE" -u "$admin_username" -a "$MANAGEMENT_ACCOUNT_ID" -r "AdministratorAccess"
+    echo "Assigning administrator access to $admin_username for management account using $ACTIVE_PROFILE profile..."
+    "$SCRIPT_DIR/assign_sso_permissions.sh" -p "$ACTIVE_PROFILE" -u "$admin_username" -a "$MANAGEMENT_ACCOUNT_ID" -r "AWSAdministratorAccess"
     update_checklist_item "Perform Administrator access assignment to admin user for management account (via \`assign_sso_permissions.sh\`)" "DONE"
 fi
 
@@ -464,7 +475,7 @@ if ! check_step_completed "SSO profile configuration for admin user" "Perform SS
    - Default region: $AWS_REGION
    - Default output format: json
 4. Sign in through the browser when prompted
-5. Select the management account and AdministratorAccess permission set
+5. Select the management account and AWSAdministratorAccess permission set
 6. Return to this terminal when done
 "
 
@@ -482,7 +493,7 @@ fi
 # Delete root user access keys
 if ! check_step_completed "Root user access key deletion" "Perform Root user access key deletion (via \`delete_root_user_access_key.sh\`)"; then
     echo "Deleting root user access keys..."
-    "$SCRIPT_DIR/delete_root_user_access_key.sh"
+    "$SCRIPT_DIR/delete_root_user_access_key.sh" -p "$INITIAL_PROFILE"
     update_checklist_item "Perform Root user access key deletion (via \`delete_root_user_access_key.sh\`)" "DONE"
 fi
 
@@ -564,13 +575,13 @@ if ! check_step_completed "Additional user creation" "Perform Additional user cr
         # Ask if they want to assign permissions to all accounts
         if prompt_yes_no "Do you want to assign administrator access to the $USERS_GROUP group for all core accounts?"; then
             echo "Assigning administrator access to $USERS_GROUP group for management account..."
-            "$SCRIPT_DIR/manage_sso_group.sh" -p "$ADMIN_PROFILE" -g "$USERS_GROUP" -a "$MANAGEMENT_ACCOUNT_ID" -r "AdministratorAccess"
+            "$SCRIPT_DIR/manage_sso_group.sh" -p "$ADMIN_PROFILE" -g "$USERS_GROUP" -a "$MANAGEMENT_ACCOUNT_ID" -r "AWSAdministratorAccess"
             
             echo "Assigning administrator access to $USERS_GROUP group for Log Archive account..."
-            "$SCRIPT_DIR/manage_sso_group.sh" -p "$ADMIN_PROFILE" -g "$USERS_GROUP" -a "$LOG_ARCHIVE_ACCOUNT" -r "AdministratorAccess"
+            "$SCRIPT_DIR/manage_sso_group.sh" -p "$ADMIN_PROFILE" -g "$USERS_GROUP" -a "$LOG_ARCHIVE_ACCOUNT" -r "AWSAdministratorAccess"
             
             echo "Assigning administrator access to $USERS_GROUP group for Audit account..."
-            "$SCRIPT_DIR/manage_sso_group.sh" -p "$ADMIN_PROFILE" -g "$USERS_GROUP" -a "$AUDIT_ACCOUNT" -r "AdministratorAccess"
+            "$SCRIPT_DIR/manage_sso_group.sh" -p "$ADMIN_PROFILE" -g "$USERS_GROUP" -a "$AUDIT_ACCOUNT" -r "AWSAdministratorAccess"
             update_checklist_item "Assign administrator access to the user group for core accounts (Management, Log Archive, Audit - Conditional, via \`manage_sso_group.sh\`)" "DONE"
         else
             update_checklist_item "Assign administrator access to the user group for core accounts (Management, Log Archive, Audit - Conditional, via \`manage_sso_group.sh\`)" "SKIPPED"
@@ -657,15 +668,50 @@ if ! check_step_completed "Control Tower controls enablement" "Perform Control T
         echo "Available Organizational Units:"
         echo "$OUS" | jq -r '.[] | .Name + " (" + .Id + ")"'
         
-        read -p "Enter the OU ID to apply controls to: " OU_ID
+        echo "You can select:"
+        echo "  - Multiple OUs by entering comma-separated IDs (e.g., ou-abcd-1,ou-efgh-2)"
+        echo "  - All OUs by typing 'all'"
+        echo "  - No OUs by pressing Enter without typing anything"
+        read -p "Enter the OU ID(s) to apply controls to: " OU_INPUT
         
-        # Validate OU ID
-        if ! echo "$OUS" | jq -r '.[].Id' | grep -q "$OU_ID"; then
-            echo "ERROR: Invalid OU ID. Please check the ID and try again." 1>&2
+        # Initialize array for selected OUs
+        declare -a SELECTED_OUS=()
+        
+        # Handle the "all" option
+        if [ "$OU_INPUT" = "all" ]; then
+            SELECTED_OUS=($(echo "$OUS" | jq -r '.[].Id'))
+            echo "Selected all OUs."
+        # Handle empty input
+        elif [ -z "$OU_INPUT" ]; then
+            echo "No OUs selected. Skipping control enablement."
+        # Handle comma-separated list
         else
-            echo "Enabling SOC 2 controls for OU $OU_ID..."
-            "$SCRIPT_DIR/enable_control_tower_controls.sh" -p "$ADMIN_PROFILE" -o "$OU_ID" -s both -b recommended
+            # Split the input by commas
+            IFS=',' read -ra OU_IDS <<< "$OU_INPUT"
+            
+            # Validate each OU ID
+            for OU_ID in "${OU_IDS[@]}"; do
+                # Trim whitespace
+                OU_ID=$(echo "$OU_ID" | xargs)
+                
+                if ! echo "$OUS" | jq -r '.[].Id' | grep -q "$OU_ID"; then
+                    echo "WARNING: Invalid OU ID: $OU_ID. Skipping this OU." 1>&2
+                else
+                    SELECTED_OUS+=("$OU_ID")
+                fi
+            done
+        fi
+        
+        # Apply controls to selected OUs
+        if [ ${#SELECTED_OUS[@]} -gt 0 ]; then
+            for OU_ID in "${SELECTED_OUS[@]}"; do
+                OU_NAME=$(echo "$OUS" | jq -r --arg id "$OU_ID" '.[] | select(.Id == $id) | .Name')
+                echo "Enabling SOC 2 controls for OU $OU_NAME ($OU_ID)..."
+                bash "$SCRIPT_DIR/enable_control_tower_controls.sh" -p "$ADMIN_PROFILE" -o "$OU_ID" -s both -b recommended
+            done
             update_checklist_item "Perform Control Tower controls enablement for a selected OU (Conditional, via \`enable_control_tower_controls.sh\`)" "DONE"
+        else
+            update_checklist_item "Perform Control Tower controls enablement for a selected OU (Conditional, via \`enable_control_tower_controls.sh\`)" "SKIPPED"
         fi
     else
         update_checklist_item "Perform Control Tower controls enablement for a selected OU (Conditional, via \`enable_control_tower_controls.sh\`)" "SKIPPED"
@@ -760,7 +806,7 @@ if prompt_yes_no "Do you want to provision additional accounts?" "n"; then
             if prompt_yes_no "Do you want to assign administrator access to $USERS_GROUP group for the new account?"; then
                 # Assign group permissions to the new account
                 echo "Assigning administrator access to $USERS_GROUP group for the new account..."
-                "$SCRIPT_DIR/manage_sso_group.sh" -p "$ADMIN_PROFILE" -g "$USERS_GROUP" -a "$NEW_ACCOUNT_ID" -r "AdministratorAccess"
+                "$SCRIPT_DIR/manage_sso_group.sh" -p "$ADMIN_PROFILE" -g "$USERS_GROUP" -a "$NEW_ACCOUNT_ID" -r "AWSAdministratorAccess"
                 update_checklist_item "Assign administrator access to the user group for new accounts (Conditional, via \`manage_sso_group.sh\`)" "DONE" # Marked per account
             else
                 update_checklist_item "Assign administrator access to the user group for new accounts (Conditional, via \`manage_sso_group.sh\`)" "SKIPPED" # Marked per account
@@ -852,7 +898,7 @@ if ! check_step_completed "KMS key management configuration" "Perform KMS key ma
                 --output text)
             
             # Assuming the group has a corresponding role
-            GROUP_ROLE_ARN="arn:aws:iam::$MANAGEMENT_ACCOUNT_ID:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_AdministratorAccess_*"
+            GROUP_ROLE_ARN="arn:aws:iam::$MANAGEMENT_ACCOUNT_ID:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_AWSAdministratorAccess_*"
             
             # Add the group's role as a key administrator
             "$SCRIPT_DIR/manage_kms_keys.sh" -p "$ADMIN_PROFILE" -k "$SELECTED_KEY" -a "$GROUP_ROLE_ARN" -e

@@ -49,7 +49,7 @@ while getopts ":p:gscmiah" opt; do
             ENABLE_SECURITY_HUB=true
             ;;
         c )
-            ENABLE_CONFIG=false
+            ENABLE_CONFIG=true
             ;;
         m )
             ENABLE_MACIE=true
@@ -163,7 +163,56 @@ if [ "$ENABLE_CONFIG" = true ]; then
     
     # Create S3 bucket for Config
     CONFIG_BUCKET="config-bucket-$ACCOUNT_ID"
+    CONFIG_PREFIX="config"
     create_s3_bucket_with_encryption "$CONFIG_BUCKET"
+    
+    # Add bucket policy to allow AWS Config to write to the bucket
+    echo "  Setting up S3 bucket policy for AWS Config..."
+    TEMP_BUCKET_POLICY=$(mktemp)
+    cat > "$TEMP_BUCKET_POLICY" << EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AWSConfigBucketPermissionsCheck",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "config.amazonaws.com"
+      },
+      "Action": "s3:GetBucketAcl",
+      "Resource": "arn:aws:s3:::$CONFIG_BUCKET"
+    },
+    {
+      "Sid": "AWSConfigBucketDelivery",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "config.amazonaws.com"
+      },
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::$CONFIG_BUCKET/$CONFIG_PREFIX/AWSLogs/$ACCOUNT_ID/Config/*",
+      "Condition": {
+        "StringEquals": {
+          "s3:x-amz-acl": "bucket-owner-full-control"
+        }
+      }
+    }
+  ]
+}
+EOF
+
+    # Apply the bucket policy
+    aws s3api put-bucket-policy \
+        --bucket "$CONFIG_BUCKET" \
+        --policy file://"$TEMP_BUCKET_POLICY" \
+        --profile "$AWS_PROFILE" > /dev/null
+        
+    if [ $? -ne 0 ]; then
+        echo "  WARNING: Failed to set bucket policy for '$CONFIG_BUCKET'!" 1>&2
+    else
+        echo "  Successfully set bucket policy for AWS Config."
+    fi
+    
+    rm -f "$TEMP_BUCKET_POLICY"
     
     # Create IAM role for Config if it doesn't exist
     CONFIG_ROLE_NAME="AWSConfigRole"
@@ -223,41 +272,46 @@ EOF
         # Enable Config recording
         echo "  Configuring AWS Config recorder..."
         
+        # Configure AWS Config recorder
+        echo "  Configuring AWS Config recorder..."
+        
         aws configservice put-configuration-recorder \
             --configuration-recorder name=default,roleARN="$CONFIG_ROLE_ARN" \
-            --recording-group allSupported=true,includeGlobalResources=true \
+            --recording-group allSupported=true,includeGlobalResourceTypes=true \
             --profile "$AWS_PROFILE" > /dev/null
         
         if [ $? -ne 0 ]; then
             echo "  ERROR: Failed to configure AWS Config recorder!" 1>&2
+            echo "  Skipping remaining AWS Config setup steps."
         else
             echo "  Successfully configured AWS Config recorder."
-        fi
-        
-        # Set up delivery channel
-        echo "  Setting up AWS Config delivery channel..."
-        
-        aws configservice put-delivery-channel \
-            --delivery-channel name=default,s3BucketName="$CONFIG_BUCKET",configSnapshotDeliveryProperties={deliveryFrequency=One_Hour} \
-            --profile "$AWS_PROFILE" > /dev/null
-        
-        if [ $? -ne 0 ]; then
-            echo "  ERROR: Failed to set up AWS Config delivery channel!" 1>&2
-        else
-            echo "  Successfully set up AWS Config delivery channel."
-        fi
-        
-        # Start the recorder
-        echo "  Starting AWS Config recorder..."
-        
-        aws configservice start-configuration-recorder \
-            --configuration-recorder-name default \
-            --profile "$AWS_PROFILE" > /dev/null
-        
-        if [ $? -ne 0 ]; then
-            echo "  ERROR: Failed to start AWS Config recorder!" 1>&2
-        else
-            echo "  Successfully started AWS Config recorder."
+            
+            # Set up delivery channel only if recorder was configured successfully
+            echo "  Setting up AWS Config delivery channel..."
+            
+            aws configservice put-delivery-channel \
+                --delivery-channel name=default,s3BucketName="$CONFIG_BUCKET",s3KeyPrefix="$CONFIG_PREFIX",configSnapshotDeliveryProperties={deliveryFrequency=One_Hour} \
+                --profile "$AWS_PROFILE" > /dev/null
+            
+            if [ $? -ne 0 ]; then
+                echo "  ERROR: Failed to set up AWS Config delivery channel!" 1>&2
+                echo "  Skipping remaining AWS Config setup steps."
+            else
+                echo "  Successfully set up AWS Config delivery channel."
+                
+                # Start the recorder only if delivery channel was set up successfully
+                echo "  Starting AWS Config recorder..."
+                
+                aws configservice start-configuration-recorder \
+                    --configuration-recorder-name default \
+                    --profile "$AWS_PROFILE" > /dev/null
+                
+                if [ $? -ne 0 ]; then
+                    echo "  ERROR: Failed to start AWS Config recorder!" 1>&2
+                else
+                    echo "  Successfully started AWS Config recorder."
+                fi
+            fi
         fi
     fi
     
@@ -422,9 +476,7 @@ if [ "$ENABLE_INSPECTOR" = true ]; then
         echo "  Configuring scanning settings..."
         
         aws inspector2 update-configuration \
-            --ec2-configuration '{"scanningStatus":"ENABLED"}' \
-            --ecr-configuration '{"scanningStatus":"ENABLED","rescanDuration":"DAYS_30"}' \
-            --lambda-configuration '{"scanningStatus":"ENABLED"}' \
+            --scanning-configuration '{"ec2":{"scanningStatus":"ENABLED"},"ecr":{"scanningStatus":"ENABLED","rescanDuration":"DAYS_30"},"lambda":{"scanningStatus":"ENABLED"}}' \
             --profile "$AWS_PROFILE" > /dev/null
         
         if [ $? -ne 0 ]; then

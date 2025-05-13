@@ -108,6 +108,7 @@ echo "Creating user..."
 USER_ID=$(aws identitystore create-user \
  --identity-store-id "$IDENTITY_STORE_ID" \
  --user-name "$USERNAME" \
+ --display-name "$FIRST_NAME $LAST_NAME" \
  --name "GivenName=$FIRST_NAME,FamilyName=$LAST_NAME" \
  --emails "Type=Work,Value=$EMAIL" \
  --profile "$AWS_PROFILE" \

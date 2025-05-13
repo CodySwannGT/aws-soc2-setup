@@ -23,3 +23,5 @@ tasks/*.txt
 tasks/task_*.txt
 # Allow tracking tasks.json for project structure but not individual task files
 !tasks/tasks.json
+
+**/.claude/settings.local.json
