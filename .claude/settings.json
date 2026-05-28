@@ -1,4 +1,15 @@
 {
+  "enabledPlugins": {
+    "lisa-wiki@lisa": true
+  },
+  "extraKnownMarketplaces": {
+    "CodySwannGT/lisa": {
+      "source": {
+        "source": "github",
+        "repo": "CodySwannGT/lisa"
+      }
+    }
+  },
   "version": "1.0.0",
   "projectRoot": "/Users/cody/workspace/aws-setup",
   "memoryLimit": 2048,
