@@ -29,3 +29,9 @@ capabilities beyond your base functionality.
 ## GitHub Copilot Compatibility
 This project is configured to work alongside GitHub Copilot.
 Copilot and Claude/Roo are both active; be aware of potential conflicts with inline suggestions.
+
+## LLM Wiki
+Durable project knowledge lives in `wiki/`, maintained by the `lisa-wiki` kernel.
+- Rules: `wiki/schema/llm-wiki-contract.md`
+- Orientation: `wiki/start-here.md` · Navigation: `wiki/index.md`
+- Query the wiki first (`/query`); add knowledge via `/ingest`. Do not hand-edit synthesis pages to add facts.

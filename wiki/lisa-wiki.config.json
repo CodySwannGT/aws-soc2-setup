@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "1.0.0",
+  "org": "aws-soc2-setup",
+  "displayName": "AWS Control Tower SOC 2 Automation Suite Wiki",
+  "purpose": "The durable knowledge base for the AWS Control Tower SOC 2 Automation Suite — a collection of interconnected scripts that automate and guide the creation of a secure, SOC 2 compliant, multi-account AWS environment using AWS Control Tower. It captures the suite's setup workflow, multi-account architecture, IAM Identity Center integration, SOC 2 security controls, organizational structure, root-account protection, and the decisions and playbooks behind them.",
+  "mode": "embedded",
+  "wikiRoot": "wiki",
+  "frontmatter": true,
+  "categories": [
+    "concepts",
+    "entities",
+    "decisions",
+    "architecture",
+    "requirements",
+    "playbooks",
+    "open-questions",
+    "projects",
+    "sales",
+    "marketing",
+    "finance",
+    "customers",
+    "people",
+    "legal"
+  ],
+  "sources": { "layout": "by-system" },
+  "git": { "prPerIngestion": true, "autoMerge": true, "targetBranch": "main", "branchPrefix": "wiki/" },
+  "sensitivity": { "enabled": false, "default": "internal" },
+  "sourceRetention": "sanitized-note-only",
+  "readme": { "mode": "rich" },
+  "documentation": { "absorb": true },
+  "connectors": {
+    "git": { "enabled": true, "sideEffects": "read-only-ingest" },
+    "memory": { "enabled": true, "sideEffects": "read-only-ingest" },
+    "roles": { "enabled": true, "sideEffects": "read-only-ingest" }
+  },
+  "staff": [
+    { "id": "chief", "role": "Chief of Staff", "owns": { "categories": ["projects", "decisions", "playbooks", "open-questions"] }, "sensitivity": "confidential" },
+    { "id": "sally", "role": "Sales", "owns": { "categories": ["sales"] }, "sensitivity": "internal" },
+    { "id": "mark", "role": "Marketing", "owns": { "categories": ["marketing"] }, "sensitivity": "internal" },
+    { "id": "felix", "role": "Finance", "owns": { "categories": ["finance"] }, "sensitivity": "confidential" },
+    { "id": "casey", "role": "Customer Success", "owns": { "categories": ["customers"] }, "sensitivity": "internal" },
+    { "id": "parker", "role": "People", "owns": { "categories": ["people"] }, "sensitivity": "confidential" },
+    { "id": "lex", "role": "Legal & Compliance", "owns": { "categories": ["legal"] }, "sensitivity": "confidential" }
+  ]
+}
