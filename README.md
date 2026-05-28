@@ -8,6 +8,8 @@
 
 A comprehensive automation suite that guides you through setting up a fully SOC 2 compliant AWS environment using Control Tower with minimal manual intervention.
 
+> 📚 **New here?** This project keeps its durable knowledge in an [LLM Wiki](wiki/start-here.md) maintained by the `lisa-wiki` kernel. Run `/onboard-me` (Codex: `$lisa-wiki-onboard-me`) for a guided tour, or browse [`wiki/index.md`](wiki/index.md).
+
 ## 📋 Table of Contents
 
 - [Overview](#-overview)
