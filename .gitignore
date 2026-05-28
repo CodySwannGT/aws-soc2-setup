@@ -25,3 +25,6 @@ tasks/task_*.txt
 !tasks/tasks.json
 
 **/.claude/settings.local.json
+
+# Dependencies
+node_modules/
