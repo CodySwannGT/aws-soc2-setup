@@ -1,0 +1,18 @@
+{
+  "connector": "git",
+  "profile": "default",
+  "lastSuccessfulRunAt": "2026-05-28T00:55:00.000Z",
+  "cursor": {
+    "lastCommit": "5c92ac2063d7fddc563eb139063177ec8eb3b07b",
+    "lastPr": 1
+  },
+  "sourceNotes": [
+    "wiki/sources/git/2026-05-28-aws-soc2-setup-git.md"
+  ],
+  "synthesisPages": [
+    "wiki/projects/aws-soc2-automation-suite.md",
+    "wiki/architecture/multi-account-control-tower.md",
+    "wiki/requirements/soc2-controls.md"
+  ],
+  "schemaVersion": "1.0.0"
+}
