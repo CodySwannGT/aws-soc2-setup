@@ -1,0 +1,7 @@
+{
+  "deploy": {
+    "branches": {
+      "production": "main"
+    }
+  }
+}
