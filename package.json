@@ -1,4 +1,10 @@
 {
+  "devDependencies": {
+    "@codyswann/lisa": "^2.142.1",
+    "eslint-plugin-oxlint": "^1.62.0",
+    "oxlint": "^1.62.0",
+    "oxlint-tsgolint": "^0.22.1"
+  },
   "scripts": {
     "build": "tsc",
     "postinstall": "[ -n \"$CI\" ] || node node_modules/@codyswann/lisa/dist/index.js --yes --skip-git-check . 2>/dev/null || true",
@@ -33,12 +39,6 @@
   "author": "",
   "type": "commonjs",
   "main": "index.js",
-  "devDependencies": {
-    "@codyswann/lisa": "^2.106.0",
-    "eslint-plugin-oxlint": "^1.62.0",
-    "oxlint": "^1.62.0",
-    "oxlint-tsgolint": "^0.22.1"
-  },
   "trustedDependencies": [
     "@ast-grep/cli",
     "@codyswann/lisa",

@@ -25,7 +25,8 @@
     "sentry@claude-plugins-official": true,
     "skill-creator@claude-plugins-official": true,
     "lisa-typescript@lisa": true,
-    "typescript-lsp@claude-plugins-official": true
+    "typescript-lsp@claude-plugins-official": true,
+    "atlassian@claude-plugins-official": true
   },
   "extraKnownMarketplaces": {
     "CodySwannGT/lisa": {
