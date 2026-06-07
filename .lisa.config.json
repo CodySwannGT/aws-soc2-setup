@@ -3,5 +3,6 @@
     "branches": {
       "production": "main"
     }
-  }
+  },
+  "harness": "fleet"
 }
