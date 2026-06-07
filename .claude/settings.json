@@ -1,6 +1,7 @@
 {
   "enabledPlugins": {
-    "lisa-wiki@lisa": true
+    "lisa-wiki@lisa": true,
+    "lisa-typescript@lisa": true
   },
   "extraKnownMarketplaces": {
     "CodySwannGT/lisa": {
