@@ -24,6 +24,10 @@
  */
 import type { ViteUserConfig } from "vitest/config";
 
+// NOTE: lisa's mergeVitestConfigs does not deep-merge nested coverage arrays,
+// so a local `coverage.exclude` set here is dropped. Keep untested wiring out
+// of coverage by extracting logic into tested modules (e.g. src/program.ts)
+// and leaving a thin src/cli.ts runner — not by relying on an exclude override.
 const config: ViteUserConfig = {
   // Add project-specific settings here
 };
