@@ -6,6 +6,7 @@ import {
 } from "@aws-sdk/client-sso-admin";
 
 import { CliError } from "../lib/errors.js";
+import { collectPaged } from "../lib/paginate.js";
 
 import { ssoAdminClient, type SsoContext } from "./instance.js";
 
@@ -33,10 +34,16 @@ export const findPermissionSetArn = async (
   name: string
 ): Promise<string | undefined> => {
   const client = ssoAdminClient(context);
-  const list = await client.send(
-    new ListPermissionSetsCommand({ InstanceArn: instanceArn })
-  );
-  for (const arn of list.PermissionSets ?? []) {
+  const arns = await collectPaged<string>(async token => {
+    const list = await client.send(
+      new ListPermissionSetsCommand({
+        InstanceArn: instanceArn,
+        NextToken: token,
+      })
+    );
+    return { items: list.PermissionSets ?? [], next: list.NextToken };
+  });
+  for (const arn of arns) {
     const described = await client.send(
       new DescribePermissionSetCommand({
         InstanceArn: instanceArn,
@@ -62,14 +69,18 @@ export const assignmentExists = async (
   instanceArn: string,
   request: AssignmentRequest
 ): Promise<boolean> => {
-  const result = await ssoAdminClient(context).send(
-    new ListAccountAssignmentsCommand({
-      InstanceArn: instanceArn,
-      AccountId: request.accountId,
-      PermissionSetArn: request.permissionSetArn,
-    })
-  );
-  return (result.AccountAssignments ?? []).some(
+  const assignments = await collectPaged(async token => {
+    const result = await ssoAdminClient(context).send(
+      new ListAccountAssignmentsCommand({
+        InstanceArn: instanceArn,
+        AccountId: request.accountId,
+        PermissionSetArn: request.permissionSetArn,
+        NextToken: token,
+      })
+    );
+    return { items: result.AccountAssignments ?? [], next: result.NextToken };
+  });
+  return assignments.some(
     assignment =>
       assignment.PrincipalId === request.principalId &&
       assignment.PrincipalType === request.principalType

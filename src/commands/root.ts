@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import { resolveGlobalOptions, type GlobalFlags } from "../lib/config.js";
 import type { GlobalOptions } from "../lib/config.js";
 import { CliError } from "../lib/errors.js";
-import { info, success } from "../lib/logger.js";
+import { info, success, warn } from "../lib/logger.js";
 import { runAction } from "../lib/run.js";
 import { deleteAccessKey, listRootAccessKeyIds } from "../root/access-keys.js";
 import {
@@ -11,6 +11,7 @@ import {
   listMemberAccounts,
   removeRootCredentials,
   type MemberAccount,
+  type RootRemovalResult,
 } from "../root/root-access.js";
 
 const requireYes = (globals: GlobalOptions, action: string): void => {
@@ -52,14 +53,27 @@ export const handleDeleteKeys = async (
   await deleteKeys(globals, keyIds);
 };
 
-const reportRemoval = (ok: boolean, account: MemberAccount): void => {
-  if (ok) {
-    success(`Removed root credentials from ${account.name} (${account.id})`);
+const reportRemoval = (
+  result: RootRemovalResult | undefined,
+  account: MemberAccount
+): void => {
+  const where = `${account.name} (${account.id})`;
+  if (!result) {
+    warn(`Could not assume a root session for ${where}`);
     return;
   }
-  info(
-    `Could not remove root credentials from ${account.name} (${account.id})`
-  );
+  if (result.failures.length > 0) {
+    warn(`Partial removal for ${where}: ${result.failures.join("; ")}`);
+  }
+  if (result.cleared.length > 0) {
+    success(
+      `Removed root credentials from ${where}: ${result.cleared.join(", ")}`
+    );
+    return;
+  }
+  if (result.failures.length === 0) {
+    info(`No root credentials present in ${where}`);
+  }
 };
 
 const removeFromAll = async (

@@ -1,9 +1,12 @@
 import {
   DeleteAccessKeyCommand,
+  DeleteLoginProfileCommand,
   EnableOrganizationsRootCredentialsManagementCommand,
   EnableOrganizationsRootSessionsCommand,
   IAMClient,
   ListAccessKeysCommand,
+  ListMFADevicesCommand,
+  ListSigningCertificatesCommand,
 } from "@aws-sdk/client-iam";
 import {
   DescribeOrganizationCommand,
@@ -81,11 +84,18 @@ describe("root/root-access", () => {
       .on(ListAccessKeysCommand)
       .resolves({ AccessKeyMetadata: [{ AccessKeyId: "AKIA1" }] });
     iamMock.on(DeleteAccessKeyCommand).resolves({});
-    await expect(removeRootCredentials(CTX, MEMBER)).resolves.toBe(true);
+    iamMock.on(DeleteLoginProfileCommand).resolves({});
+    iamMock.on(ListSigningCertificatesCommand).resolves({ Certificates: [] });
+    iamMock.on(ListMFADevicesCommand).resolves({ MFADevices: [] });
+
+    const result = await removeRootCredentials(CTX, MEMBER);
+
+    expect(result?.cleared).toContain("access key AKIA1");
+    expect(result?.cleared).toContain("console password");
   });
 
-  it("removeRootCredentials returns false when assume-root fails", async () => {
+  it("removeRootCredentials returns undefined when assume-root fails", async () => {
     stsMock.on(AssumeRootCommand).rejects(new Error("denied"));
-    await expect(removeRootCredentials(CTX, MEMBER)).resolves.toBe(false);
+    await expect(removeRootCredentials(CTX, MEMBER)).resolves.toBeUndefined();
   });
 });

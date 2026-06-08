@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import { resolveGlobalOptions, type GlobalFlags } from "../lib/config.js";
 import type { GlobalOptions } from "../lib/config.js";
 import { CliError } from "../lib/errors.js";
-import { info } from "../lib/logger.js";
+import { info, warn } from "../lib/logger.js";
 import { runAction } from "../lib/run.js";
 import { getCallerIdentity } from "../lib/sts.js";
 import { enableAwsConfig } from "../security/config.js";
@@ -52,25 +52,41 @@ const requireSelection = (options: SecurityEnableOptions): Selection => {
   return selection;
 };
 
+const isolate = async (
+  label: string,
+  op: () => Promise<void>
+): Promise<void> => {
+  try {
+    await op();
+  } catch (caught) {
+    warn(
+      `${label} failed: ${caught instanceof Error ? caught.message : String(caught)}`
+    );
+  }
+};
+
 const runSelected = async (
   globals: GlobalOptions,
   selection: Selection,
   accountId: string
 ): Promise<void> => {
+  // Each service is isolated: a failure in one warns and continues to the
+  // rest, matching the original script's independent per-service blocks.
+  // (helper defined above)
   if (selection.config) {
-    await enableAwsConfig(globals, accountId);
+    await isolate("AWS Config", () => enableAwsConfig(globals, accountId));
   }
   if (selection.guardduty) {
-    await enableGuardDuty(globals);
+    await isolate("GuardDuty", () => enableGuardDuty(globals));
   }
   if (selection.securityHub) {
-    await enableSecurityHub(globals);
+    await isolate("Security Hub", () => enableSecurityHub(globals));
   }
   if (selection.macie) {
-    await enableMacie(globals);
+    await isolate("Macie", () => enableMacie(globals));
   }
   if (selection.inspector) {
-    await enableInspector(globals);
+    await isolate("Inspector", () => enableInspector(globals));
   }
 };
 

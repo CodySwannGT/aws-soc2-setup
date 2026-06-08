@@ -1,9 +1,12 @@
 import {
   DeleteAccessKeyCommand,
+  DeleteLoginProfileCommand,
   EnableOrganizationsRootCredentialsManagementCommand,
   EnableOrganizationsRootSessionsCommand,
   IAMClient,
   ListAccessKeysCommand,
+  ListMFADevicesCommand,
+  ListSigningCertificatesCommand,
 } from "@aws-sdk/client-iam";
 import {
   DescribeOrganizationCommand,
@@ -114,6 +117,9 @@ describe("handleRemoveAccess", () => {
       },
     });
     iamMock.on(ListAccessKeysCommand).resolves({ AccessKeyMetadata: [] });
+    iamMock.on(DeleteLoginProfileCommand).resolves({});
+    iamMock.on(ListSigningCertificatesCommand).resolves({ Certificates: [] });
+    iamMock.on(ListMFADevicesCommand).resolves({ MFADevices: [] });
 
     await handleRemoveAccess(globals({ yes: true }));
 

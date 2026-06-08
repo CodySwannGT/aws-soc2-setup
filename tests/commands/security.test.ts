@@ -91,6 +91,20 @@ describe("handleSecurityEnable", () => {
     await handleSecurityEnable(globals(), { guardduty: true });
     expect(gdMock.commandCalls(CreateDetectorCommand)).toHaveLength(1);
   });
+
+  it("continues to other services when one fails (per-service isolation)", async () => {
+    s3Mock.reset();
+    s3Mock.on(HeadBucketCommand).rejects(new Error("404"));
+    s3Mock.on(CreateBucketCommand).rejects(new Error("denied"));
+    gdMock.on(ListDetectorsCommand).resolves({ DetectorIds: [] });
+    gdMock.on(CreateDetectorCommand).resolves({ DetectorId: "det-1" });
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    // Config fails (bucket creation denied) but GuardDuty must still run.
+    await handleSecurityEnable(globals(), { config: true, guardduty: true });
+
+    expect(gdMock.commandCalls(CreateDetectorCommand)).toHaveLength(1);
+  });
 });
 
 describe("handleSecurityAudit", () => {

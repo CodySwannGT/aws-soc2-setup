@@ -2,7 +2,7 @@ import type { Command } from "commander";
 
 import { resolveGlobalOptions, type GlobalFlags } from "../lib/config.js";
 import type { GlobalOptions } from "../lib/config.js";
-import { info, success } from "../lib/logger.js";
+import { info, success, warn } from "../lib/logger.js";
 import { runAction } from "../lib/run.js";
 import { requireAccountId } from "../lib/validate.js";
 import { registerSsoConfigCommands } from "./sso-config.js";
@@ -19,7 +19,12 @@ import {
   type AssignmentResult,
   type PrincipalType,
 } from "../sso/permissions.js";
-import { createUser, listUsers, requireUserId } from "../sso/users.js";
+import {
+  createUser,
+  findUserId,
+  listUsers,
+  requireUserId,
+} from "../sso/users.js";
 
 const DEFAULT_PERMISSION_SET = "AWSAdministratorAccess";
 const DEFAULT_GROUP_DESCRIPTION = "Group created by aws-soc2-setup";
@@ -117,13 +122,15 @@ const addNamedUser = async (
   groupId: string,
   userName: string
 ): Promise<void> => {
-  const result = await ensureGroupMembership(
-    globals,
-    identityStoreId,
-    groupId,
-    await requireUserId(globals, identityStoreId, userName)
+  const userId = await findUserId(globals, identityStoreId, userName);
+  if (!userId) {
+    warn(`User '${userName}' not found. Skipping.`);
+    return;
+  }
+  reportMembership(
+    await ensureGroupMembership(globals, identityStoreId, groupId, userId),
+    userName
   );
-  reportMembership(result, userName);
 };
 
 const addNamedUsers = async (

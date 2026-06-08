@@ -6,6 +6,7 @@ import {
 
 import { buildClientConfig } from "../lib/aws.js";
 import { CliError } from "../lib/errors.js";
+import { collectPaged } from "../lib/paginate.js";
 
 import type { SsoContext } from "./instance.js";
 
@@ -77,10 +78,16 @@ export const listUsers = async (
   context: SsoContext,
   identityStoreId: string
 ): Promise<IdentityStoreUser[]> => {
-  const result = await identityStoreClient(context).send(
-    new ListUsersCommand({ IdentityStoreId: identityStoreId })
-  );
-  return (result.Users ?? [])
+  const users = await collectPaged(async token => {
+    const result = await identityStoreClient(context).send(
+      new ListUsersCommand({
+        IdentityStoreId: identityStoreId,
+        NextToken: token,
+      })
+    );
+    return { items: result.Users ?? [], next: result.NextToken };
+  });
+  return users
     .filter(user => user.UserId && user.UserName)
     .map(user => ({ userId: user.UserId!, userName: user.UserName! }));
 };

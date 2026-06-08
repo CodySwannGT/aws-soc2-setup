@@ -33,7 +33,12 @@ const applyPolicyChange = async (
   transform: (policy: KeyPolicy) => KeyPolicy,
   describeChange: string
 ): Promise<void> => {
-  const next = transform(await getKeyPolicy(globals, keyId));
+  const current = await getKeyPolicy(globals, keyId);
+  const next = transform(current);
+  if (next === current) {
+    info(`No policy change needed (${describeChange})`);
+    return;
+  }
   if (globals.dryRun) {
     info(`[dry-run] Would update key policy: ${describeChange}`);
     return;

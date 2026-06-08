@@ -8,6 +8,7 @@ import {
 
 import { buildClientConfig } from "../lib/aws.js";
 import { CliError } from "../lib/errors.js";
+import { collectPaged } from "../lib/paginate.js";
 
 import type { SsoContext } from "./instance.js";
 
@@ -87,15 +88,17 @@ export const isGroupMember = async (
   groupId: string,
   userId: string
 ): Promise<boolean> => {
-  const result = await identityStoreClient(context).send(
-    new ListGroupMembershipsCommand({
-      IdentityStoreId: identityStoreId,
-      GroupId: groupId,
-    })
-  );
-  return (result.GroupMemberships ?? []).some(
-    membership => membership.MemberId?.UserId === userId
-  );
+  const memberships = await collectPaged(async token => {
+    const result = await identityStoreClient(context).send(
+      new ListGroupMembershipsCommand({
+        IdentityStoreId: identityStoreId,
+        GroupId: groupId,
+        NextToken: token,
+      })
+    );
+    return { items: result.GroupMemberships ?? [], next: result.NextToken };
+  });
+  return memberships.some(membership => membership.MemberId?.UserId === userId);
 };
 
 /** Outcome of adding a user to a group. */

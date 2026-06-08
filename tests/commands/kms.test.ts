@@ -66,8 +66,27 @@ describe("handleKms", () => {
   });
 
   it("writes the policy back when removing an administrator", async () => {
+    kmsMock.on(GetKeyPolicyCommand).resolves({
+      Policy: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Sid: "Allow administration of the key",
+            Effect: "Allow",
+            Principal: { AWS: [ADMIN] },
+            Action: "kms:*",
+            Resource: "*",
+          },
+        ],
+      }),
+    });
     await handleKms(globals(), { keyId: KEY_ID, removeAdmin: ADMIN });
     expect(kmsMock.commandCalls(PutKeyPolicyCommand)).toHaveLength(1);
+  });
+
+  it("does not write when removing an admin that has no statement", async () => {
+    await handleKms(globals(), { keyId: KEY_ID, removeAdmin: ADMIN });
+    expect(kmsMock.commandCalls(PutKeyPolicyCommand)).toHaveLength(0);
   });
 
   it("shows the policy when requested", async () => {
