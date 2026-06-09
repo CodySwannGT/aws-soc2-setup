@@ -1,4 +1,9 @@
 {
+  "wiki": {
+    "source": {
+      "path": "wiki"
+    }
+  },
   "deploy": {
     "branches": {
       "production": "main"
