@@ -160,8 +160,9 @@ const setupAuditManager = async (
   options: AuditOptions
 ): Promise<boolean> => {
   await registerAuditAdmin(context, options);
-  const outcome = await updateAuditManagerSettings(context, options.bucket);
-  return reportAuditManagerOutcome(outcome);
+  return reportAuditManagerOutcome(
+    await updateAuditManagerSettings(context, options.bucket)
+  );
 };
 
 /**
