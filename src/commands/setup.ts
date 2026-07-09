@@ -14,6 +14,10 @@ import {
 import { handleCreateOus, type CreateOusOptions } from "./controltower.js";
 import { handleCreateOrganization } from "./controltower-organization.js";
 import {
+  handleRegisterOu,
+  type RegisterOuOptions,
+} from "./controltower-register-ou.js";
+import {
   handleSecurityAudit,
   type SecurityAuditOptions,
 } from "./security-audit.js";
@@ -34,6 +38,7 @@ export interface SetupOptions {
 export interface SetupRunners {
   createOrganization: (g: GlobalOptions) => Promise<void>;
   createOus: (g: GlobalOptions, o: CreateOusOptions) => Promise<void>;
+  registerOu: (g: GlobalOptions, o: RegisterOuOptions) => Promise<void>;
   enableSecurity: (g: GlobalOptions, o: SecurityEnableOptions) => Promise<void>;
   enableControls: (g: GlobalOptions, o: EnableControlsOptions) => Promise<void>;
   configureBackup: (g: GlobalOptions, o: BackupCommandOptions) => Promise<void>;
@@ -43,6 +48,7 @@ export interface SetupRunners {
 const defaultRunners: SetupRunners = {
   createOrganization: handleCreateOrganization,
   createOus: handleCreateOus,
+  registerOu: handleRegisterOu,
   enableSecurity: handleSecurityEnable,
   enableControls: handleEnableControls,
   configureBackup: handleBackup,
@@ -66,6 +72,9 @@ const runAutomated = async (
 ): Promise<void> => {
   await runners.createOrganization(globals);
   await runners.createOus(globals, { all: true });
+  if (options.ou) {
+    await runners.registerOu(globals, { ou: options.ou, wait: true });
+  }
   await runners.enableSecurity(globals, { all: true });
   if (options.ou) {
     await runners.enableControls(globals, {
@@ -93,9 +102,9 @@ const runAutomated = async (
 
 /**
  * Execute `setup`: print the ordered SOC 2 setup plan and run the automatable
- * steps (OUs, security services, controls, backup, audit) by composing the
- * domain commands. Manual/console steps are printed as guidance. Honors
- * `--dry-run` (plan only).
+ * steps (OUs, OU registration, security services, controls, backup, audit) by
+ * composing the domain commands. Manual/console steps are printed as guidance.
+ * Honors `--dry-run` (plan only).
  * @param globals - Resolved global options.
  * @param options - Inputs for the automatable steps.
  * @param runners - Step handlers (defaults to the real commands).
@@ -122,10 +131,13 @@ export const registerSetup = (program: Command): void => {
     .description(
       "Orchestrate the SOC 2 Control Tower setup (plan + automatable steps)"
     )
-    .option("--ou <ouId>", "OU id for Control Tower controls (step 11)")
-    .option("--central-account <id>", "Central backup account id (step 12)")
-    .option("--admin-account <id>", "Backup administrator account id (step 12)")
-    .option("--audit-account <id>", "Audit account id (step 13)")
+    .option(
+      "--ou <ouId>",
+      "OU id for Control Tower registration and controls (steps 10, 12)"
+    )
+    .option("--central-account <id>", "Central backup account id (step 13)")
+    .option("--admin-account <id>", "Backup administrator account id (step 13)")
+    .option("--audit-account <id>", "Audit account id (step 14)")
     .action(async (options: SetupOptions) => {
       await runAction(async () => {
         await handleSetup(

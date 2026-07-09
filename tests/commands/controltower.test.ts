@@ -204,6 +204,7 @@ describe("registerControlTower", () => {
       expect.arrayContaining([
         "create-organization",
         "create-ous",
+        "register-ou",
         "provision-account",
       ])
     );

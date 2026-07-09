@@ -15,6 +15,7 @@ const globals = (over: Partial<GlobalOptions> = {}): GlobalOptions => ({
 const makeRunners = (): SetupRunners => ({
   createOrganization: vi.fn().mockResolvedValue(undefined),
   createOus: vi.fn().mockResolvedValue(undefined),
+  registerOu: vi.fn().mockResolvedValue(undefined),
   enableSecurity: vi.fn().mockResolvedValue(undefined),
   enableControls: vi.fn().mockResolvedValue(undefined),
   configureBackup: vi.fn().mockResolvedValue(undefined),
@@ -22,13 +23,17 @@ const makeRunners = (): SetupRunners => ({
 });
 
 describe("SETUP_PLAN", () => {
-  it("documents all seventeen ordered steps", () => {
-    expect(SETUP_PLAN).toHaveLength(17);
+  it("documents all eighteen ordered steps", () => {
+    expect(SETUP_PLAN).toHaveLength(18);
     expect(SETUP_PLAN.map(step => step.number)).toEqual(
-      Array.from({ length: 17 }, (_, i) => i + 1)
+      Array.from({ length: 18 }, (_, i) => i + 1)
     );
     expect(SETUP_PLAN.find(step => step.number === 3)).toMatchObject({
       title: "Create AWS Organizations",
+      kind: "automated",
+    });
+    expect(SETUP_PLAN.find(step => step.number === 10)).toMatchObject({
+      title: "Register OUs with Control Tower",
       kind: "automated",
     });
   });
@@ -55,6 +60,7 @@ describe("handleSetup", () => {
     expect(runners.createOus).toHaveBeenCalledWith(expect.anything(), {
       all: true,
     });
+    expect(runners.registerOu).not.toHaveBeenCalled();
     expect(runners.enableSecurity).toHaveBeenCalledWith(expect.anything(), {
       all: true,
     });
@@ -76,6 +82,10 @@ describe("handleSetup", () => {
       },
       runners
     );
+    expect(runners.registerOu).toHaveBeenCalledWith(expect.anything(), {
+      ou: "ou-abcd-12345678",
+      wait: true,
+    });
     expect(runners.enableControls).toHaveBeenCalledTimes(1);
     expect(runners.configureBackup).toHaveBeenCalledTimes(1);
     expect(runners.configureAudit).toHaveBeenCalledTimes(1);
