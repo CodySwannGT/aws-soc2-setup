@@ -1,247 +1,182 @@
-# 🏗️ AWS Control Tower SOC 2 Automation Suite
+# AWS Control Tower SOC 2 Automation Suite
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![SOC 2 Compliant](https://img.shields.io/badge/SOC%202-Compliant-green)](https://www.aicpa.org/interestareas/frc/assuranceadvisoryservices/soc2relevantguidance.html)
+[![npm](https://img.shields.io/npm/v/@codyswann/aws-soc2-setup.svg)](https://www.npmjs.com/package/@codyswann/aws-soc2-setup)
+[![SOC 2 aligned](https://img.shields.io/badge/SOC%202-aligned-green)](https://www.aicpa.org/interestareas/frc/assuranceadvisoryservices/soc2relevantguidance.html)
 [![AWS Control Tower](https://img.shields.io/badge/AWS-Control%20Tower-orange)](https://aws.amazon.com/controltower/)
 
-> Streamlined automation for SOC 2 compliant AWS Control Tower environments
+> Open-source TypeScript CLI for SOC 2–aligned AWS Control Tower environments
 
-A comprehensive automation suite that guides you through setting up a fully SOC 2 compliant AWS environment using Control Tower with minimal manual intervention.
+`aws-soc2-setup` turns the usual multi-day Control Tower + SOC 2 bootstrap into a guided, skip-friendly workflow: Identity Center, organizational units, security services, controls, backup, KMS, and root lockdown.
 
-> 📚 **New here?** This project keeps its durable knowledge in an [LLM Wiki](wiki/start-here.md) maintained by the `lisa-wiki` kernel. Run `/onboard-me` (Codex: `$lisa-wiki-onboard-me`) for a guided tour, or browse [`wiki/index.md`](wiki/index.md).
+> **New here?** Durable project knowledge lives in the [LLM Wiki](wiki/start-here.md). Browse [`wiki/index.md`](wiki/index.md) or run `/onboard-me` (Codex: `$lisa-wiki-onboard-me`).
 
-## 📋 Table of Contents
+## Table of contents
 
-- [Overview](#-overview)
-- [Features](#-features)
-- [Why Use This Suite](#-why-use-this-suite)
-- [AI Coding Assistant Integration](#-ai-coding-assistant-integration)
-- [Prerequisites](#-prerequisites)
-- [Installation](#-installation)
-- [Usage](#-usage)
-- [Setup Process Details](#-setup-process-details)
-- [Advanced Configuration](#-advanced-configuration)
-- [Security Considerations](#-security-considerations)
-- [Contributing](#-contributing)
-- [License](#-license)
-- [Acknowledgements](#-acknowledgements)
+- [Overview](#overview)
+- [Features](#features)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Commands](#commands)
+- [Setup plan](#setup-plan)
+- [Security considerations](#security-considerations)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
+- [Disclaimer](#disclaimer)
 
-## 🔍 Overview
+## Overview
 
-The AWS Control Tower SOC 2 Automation Suite is a collection of interconnected scripts designed to automate and guide the creation of a secure, compliant, multi-account AWS environment. It reduces the complex, error-prone manual process of implementing SOC 2 requirements within AWS Control Tower into a streamlined, repeatable workflow.
+This package is a typed Node.js CLI (`aws-soc2-setup`) published as [`@codyswann/aws-soc2-setup`](https://www.npmjs.com/package/@codyswann/aws-soc2-setup). It uses AWS SDK v3 under the hood and replaces the earlier Bash suite with the same domain coverage:
 
-This suite bridges the gap between AWS Control Tower's built-in capabilities and the specific requirements needed for SOC 2 compliance, handling everything from initial account setup to ongoing security controls.
+| Domain | What it covers |
+| --- | --- |
+| **setup** | 16-step orchestrator (plan + automatable steps) |
+| **status** / **whoami** | Environment readiness and caller identity |
+| **sso** | IAM Identity Center users, groups, assignments, profile config |
+| **controltower** | OUs, Account Factory provisioning, Control Tower controls |
+| **security** | GuardDuty, Security Hub, Config, Macie, Inspector, Audit Manager |
+| **backup** | AWS Backup vault/plan + delegated admin |
+| **kms** | Key administrators and rotation |
+| **root** | Delete root access keys; org-wide root credential removal |
 
-## ✨ Features
+Manual console steps (root MFA, enabling Identity Center, landing zone creation) stay explicit in the plan — the CLI does not pretend those are fully automatable.
 
-- **Guided Setup**: Step-by-step interactive process with clear instructions
-- **Skip-Friendly**: Already completed some steps? No problem – the suite can start from any point
-- **Multi-Account Architecture**: Properly configure management, audit, log archive, and workload accounts
-- **IAM Identity Center Integration**: Automated user and permission management
-- **SOC 2 Security Controls**: Automatic enablement of required security services
-- **Organizational Structure**: Create and register the proper OUs for your compliance needs
-- **Root Account Protection**: Ensure proper MFA and access key management
+## Features
 
-## 🎯 Why Use This Suite
+- **Guided setup** — `setup` prints the ordered plan and runs the automatable steps
+- **Dry-run safe** — global `--dry-run` previews mutating work; `status` is always read-only
+- **Multi-account architecture** — management, audit, log archive, and workload accounts via Control Tower
+- **IAM Identity Center** — users, groups, and permission-set assignment instead of long-lived IAM users
+- **SOC 2–oriented controls** — security services, Control Tower guardrails, backup, and KMS
+- **Root protection** — delete root keys and remove root credentials from member accounts
+- **Open source** — MIT licensed; contributions welcome
 
-### Save Time and Reduce Errors
+## Install
 
-Manually setting up a SOC 2 compliant AWS environment typically takes 8-16 hours of work with numerous opportunities for configuration errors. This suite reduces that time by up to 75% and ensures consistency.
-
-### Ensure Compliance from Day One
-
-SOC 2 audits examine your environment's historical compliance. Starting with a compliant foundation means no retroactive fixes or explanations needed.
-
-### Simplify Multi-Account Management
-
-AWS recommends a multi-account strategy for security isolation, but configuring this properly is complex. This suite handles the intricacies of account relationships, permissions, and security service configurations automatically.
-
-### Enhanced Security for Root Accounts
-
-The suite automatically disables console access for root users in sub-accounts, following AWS best practices for security. This critical protection helps prevent unauthorized access to your most privileged accounts and satisfies SOC 2 requirements for privileged access management.
-
-### Reduce Cloud Security Expertise Requirements
-
-Not everyone on your team may be an AWS security expert. This suite codifies best practices and provides clear, actionable guidance throughout the process.
-
-## 🤖 AI Coding Assistant Integration
-
-This repository is configured to seamlessly integrate with AI Coding Assistants, leveraging the framework provided by [AI Coding Assistants Setup](https://github.com/codySwannGT/ai-coding-assistants-setup). This integration enhances the development experience by:
-
-- **Accelerating Development:** AI assistants can help generate boilerplate code, suggest solutions, and automate repetitive tasks.
-- **Improving Code Quality:** Assistants can provide real-time feedback on code style, identify potential bugs, and suggest best practices.
-- **Facilitating Complex Tasks:** AI can assist in understanding complex codebases, refactoring, and implementing new features more efficiently.
-- **Streamlining Workflows:** The setup enables a more interactive and intelligent development environment, allowing developers to focus on higher-level problem-solving.
-
-By incorporating AI-powered tools, this project aims to boost productivity and maintain high standards of code quality and innovation.
-
-## 📋 Prerequisites
-
-- AWS root account with administrator access
-- AWS CLI installed and configured
-- `jq` command-line tool installed
-- Bash shell environment
-- Basic understanding of AWS services
-
-## 🚀 Installation
-
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/yourusername/aws-controltower-soc2-automation.git
-   cd aws-controltower-soc2-automation
-   ```
-
-2. Ensure all scripts have execution permissions:
-   ```bash
-   chmod +x *.sh
-   ```
-
-3. Install required dependencies:
-   ```bash
-   # For Debian/Ubuntu
-   sudo apt-get update && sudo apt-get install -y jq awscli
-   
-   # For macOS
-   brew install jq awscli
-   ```
-
-## 🛠️ Usage
-
-Run the master script with optional parameters:
+**Requirements:** Node.js 18+, AWS credentials (CLI profile or default chain), and an AWS account where you can enable Organizations / Control Tower.
 
 ```bash
-./master_control_tower_setup.sh [-a ACCOUNT_ID] [-p PROFILE] [-d ADMIN_PROFILE] [-r REGION] [-h]
+# one-shot
+npx @codyswann/aws-soc2-setup --help
+
+# or install globally
+npm install -g @codyswann/aws-soc2-setup
+aws-soc2-setup --help
 ```
 
-**Parameters:**
-- `-a ACCOUNT_ID`: Your 12-digit AWS account ID
-- `-p PROFILE`: Initial AWS CLI profile name (default: sampleproject)
-- `-d ADMIN_PROFILE`: Admin AWS CLI profile name (default: thehobbyhome-management)
-- `-r REGION`: AWS region (default: us-east-1)
-- `-h`: Display help message
-
-**Example:**
-```bash
-./master_control_tower_setup.sh -a 123456789012 -d my-admin-profile -r us-west-2
-```
-
-## 📊 Setup Process Details
-
-The setup process follows these key steps, each designed to implement specific SOC 2 requirements:
-
-### 1. Initial AWS CLI Profile Setup
-**What it does:** Creates a temporary profile with root credentials to bootstrap the environment.  
-**Why it matters:** Provides necessary initial access while ensuring we can remove these credentials later for security.
-
-### 2. Enable MFA for Root User
-**What it does:** Guides you through setting up Multi-Factor Authentication for the root account.  
-**Why it matters:** Required for SOC 2 compliance and protects your most privileged account from unauthorized access.
-
-### 3. Enable IAM Identity Center
-**What it does:** Activates AWS IAM Identity Center (formerly AWS SSO).  
-**Why it matters:** Provides centralized access management with fine-grained permissions required for proper segregation of duties.
-
-### 4. Set up AWS Control Tower
-**What it does:** Deploys the Control Tower landing zone with appropriate configurations.  
-**Why it matters:** Creates the foundation of your multi-account architecture with built-in guardrails and compliance controls.
-
-### 5. Create and Configure Admin User
-**What it does:** Creates an administrative user in IAM Identity Center with appropriate permissions.  
-**Why it matters:** Establishes a secure administrative account for ongoing management, moving away from root account usage.
-
-### 6. Create IAM Identity Center Group
-**What it does:** Creates a group for administrative users.  
-**Why it matters:** Enables role-based access control and simplifies permission management.
-
-### 7. Create Additional Users
-**What it does:** Adds users to IAM Identity Center and assigns them to groups.  
-**Why it matters:** Ensures proper identity management and access controls.
-
-### 8. Create Organizational Units
-**What it does:** Establishes recommended OUs (Infrastructure, Workloads, Sandbox) and registers them with Control Tower.  
-**Why it matters:** Provides proper organizational structure for workload isolation and security boundary enforcement.
-
-### 9. Enable Security Services
-**What it does:** Activates essential security services like GuardDuty, Security Hub, Config, Macie, and Inspector.  
-**Why it matters:** Implements required security monitoring, detection, and compliance validation services.
-
-### 10. Provision Additional Accounts
-**What it does:** Creates and configures additional AWS accounts through Control Tower Account Factory with automated enrollment completion tracking.  
-**Why it matters:** Simplifies the account creation process and ensures all accounts are properly configured and monitored.
-
-### 11. Disable Root User Console Access
-**What it does:** Removes root user credentials from all sub-accounts and configures the organization to create new accounts without root credentials by default.  
-**Why it matters:** Critical security measure that prevents unauthorized access to the most privileged account in each sub-account, satisfying SOC 2 privileged access requirements.
-
-## 🔧 Advanced Configuration
-
-### Customizing Organizational Units
-For organizations with specific structural needs, modify `create_organizational_units.sh` to add or change OUs:
+From a clone of this repo (Bun is the package manager):
 
 ```bash
-# Example: Add a custom OU
-./create_organizational_units.sh -p your-admin-profile -n "CustomOU" -d "Custom organizational unit for specific workloads"
+git clone https://github.com/CodySwannGT/aws-soc2-setup.git
+cd aws-soc2-setup
+bun install
+bun run build
+./bin/aws-soc2-setup.js --help
 ```
 
-### Adding Custom Security Controls
-Additional security controls can be added by modifying `enable_security_services.sh`.
-
-### Implementing Custom Guardrails
-For organizations requiring additional preventative or detective guardrails:
+## Quick start
 
 ```bash
-# Enable specific Control Tower controls
-./enable_control_tower_controls.sh -p your-admin-profile -c "CT.IAM.PR.1" -o "Infrastructure"
+# Confirm credentials
+aws-soc2-setup whoami -p your-admin-profile
+
+# See what the environment already has
+aws-soc2-setup status -p your-admin-profile
+
+# Preview the full setup plan (no changes)
+aws-soc2-setup setup --dry-run -p your-admin-profile
+
+# Run automatable steps (OUs, security services, optional controls/backup/audit)
+aws-soc2-setup setup -p your-admin-profile \
+  --ou ou-xxxx-xxxxxxxx \
+  --central-account 111122223333 \
+  --admin-account 444455556666 \
+  --audit-account 777788889999
 ```
 
-## 🔒 Security Considerations
+**Global options** (apply to every command):
 
-### Root Access Keys
-Root user access keys are temporarily created and deleted as part of the setup process. If the process is interrupted, ensure these are manually deleted.
+| Flag | Description |
+| --- | --- |
+| `-p, --profile <profile>` | AWS CLI profile |
+| `-r, --region <region>` | Region (default: `AWS_REGION` or `us-east-1`) |
+| `--dry-run` | Preview mutating actions without applying them |
+| `-y, --yes` | Skip confirmation prompts (required for destructive `root` ops) |
 
-### Root Console Access in Sub-accounts
-The suite automatically disables console access for root users in all sub-accounts, following AWS security best practices. This ensures that your most privileged accounts can't be compromised, even if credentials are leaked.
+## Commands
 
-### Security Services for New Accounts
-When provisioning new accounts via Account Factory, be aware that security services (GuardDuty, Security Hub, Config, etc.) are not automatically enabled on these accounts. After creating new accounts, you should re-run the security service enablement script for each new account to ensure comprehensive security coverage.
+| Command | Purpose |
+| --- | --- |
+| `status` | Read-only readiness: credentials, Organizations, recommended OUs, Identity Center, member accounts |
+| `whoami` | Print STS caller identity |
+| `setup` | Print the 16-step plan and run automatable steps |
+| `sso create-user` / `group` / `assign` | Identity Center users, groups, permission sets |
+| `sso configure-profile` / `set-start-url` | Local SSO profile and start URL |
+| `controltower create-ous` | Create Infrastructure / Workloads / Sandbox OUs |
+| `controltower provision-account` | Account Factory provisioning (`--wait` supported) |
+| `controltower enable-controls` | Enable Control Tower controls for an OU |
+| `security enable` | Enable GuardDuty, Security Hub, Config, Macie, Inspector |
+| `security audit` | Audit Manager / SOC 2 framework / Config aggregator |
+| `backup` | Configure AWS Backup (vault, plan, delegated admin) |
+| `kms` | Manage key administrators and rotation |
+| `root delete-keys` / `remove-access` | Root key deletion and org-wide root lockdown (`--yes` required) |
 
-### Audit Logs
-Control Tower automatically enables CloudTrail in the Audit account. Consider additional configurations for log retention and analysis.
+Run `aws-soc2-setup <command> --help` for flags on each subcommand.
 
-### Cross-Account Access
-The automation creates appropriate cross-account roles. Review these regularly to maintain the principle of least privilege.
+## Setup plan
 
-## 👥 Contributing
+`setup` follows this sequence. Automated steps run when you invoke `setup` (with the options they need); manual steps are printed as guidance.
 
-Contributions are welcome! Please follow these steps:
+| # | Step | Kind |
+| --- | --- | --- |
+| 1 | Initial AWS CLI / SSO profile setup | Manual (`sso configure-profile`) |
+| 2 | Enable MFA for the root user | Manual (console) |
+| 3 | Enable IAM Identity Center | Manual (console) |
+| 4 | Set up AWS Control Tower landing zone | Manual (console) |
+| 5 | Create the admin user | Manual (`sso create-user`, `sso assign`, `root delete-keys`) |
+| 6 | Create the initial users group | Manual (`sso group`) |
+| 7 | Create additional users | Manual (`sso create-user` / `sso group`) |
+| 8 | Create organizational units | Automated (`controltower create-ous --all`) |
+| 9 | Enable security services | Automated (`security enable --all`) |
+| 10 | Enable Control Tower controls | Automated (`controltower enable-controls`) |
+| 11 | Configure AWS Backup | Automated (`backup`) |
+| 12 | Configure audit and reporting | Automated (`security audit`) |
+| 13 | Provision additional accounts | Manual (`controltower provision-account`) |
+| 14 | Custom Identity Center domain | Manual (`sso set-start-url`) |
+| 15 | Disable root access for sub-accounts | Manual (`root remove-access --yes`) |
+| 16 | Configure KMS key management | Manual (`kms`) |
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+Track progress with [`docs/CHECKLIST.md`](docs/CHECKLIST.md).
 
-Please make sure your code follows our [coding standards](CONTRIBUTING.md).
+## Security considerations
 
-## 📄 License
+- **Root access keys** may be created temporarily during bootstrap; delete them promptly (`root delete-keys`). If a run is interrupted, remove any leftover root keys manually.
+- **`root remove-access`** is destructive and requires `--yes`. Review member accounts before running it.
+- **New Account Factory accounts** do not automatically inherit every security service. Re-run `security enable` (or `setup`) after provisioning.
+- **Least privilege** — prefer Identity Center permission sets over long-lived IAM users; review cross-account roles regularly.
+- This tool helps implement *technical* controls relevant to SOC 2. It does **not** guarantee a successful audit.
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## Development
 
-## 🙏 Acknowledgements
+```bash
+bun install
+bun run build
+bun run test
+bun run lint
+bun run typecheck
+```
 
-- AWS Control Tower documentation and best practices
-- SOC 2 compliance framework
-- [AWS Organizations Best Practices](https://aws.amazon.com/organizations/getting-started/best-practices/)
-- Contributors and early adopters who provided valuable feedback
+Source lives under `src/` (commands, domain modules, shared `lib/`). Tests mirror that layout under `tests/` (Vitest + `aws-sdk-client-mock`).
 
----
+## Contributing
 
-## 📞 Support
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Open issues and pull requests against [CodySwannGT/aws-soc2-setup](https://github.com/CodySwannGT/aws-soc2-setup).
 
-For questions, issues, or feature requests, please open an issue in this repository.
+## License
 
-If you find this project useful, please consider giving it a star on GitHub! ⭐️
+MIT — see [LICENSE](LICENSE).
 
----
+## Disclaimer
 
-**Disclaimer:** This suite helps implement technical controls relevant to SOC 2 compliance but does not guarantee a successful audit. Organizations should work with qualified auditors to ensure their specific compliance requirements are met.
+This suite helps implement technical controls relevant to SOC 2 compliance but does not guarantee a successful audit. Work with qualified auditors for your organization's specific requirements.

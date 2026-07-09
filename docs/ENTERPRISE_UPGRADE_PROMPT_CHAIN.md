@@ -1,5 +1,9 @@
 # Enterprise Upgrade Implementation Prompt Chain
 
+> **Historical (Bash-era):** Written for the retired shell suite. The product is now the TypeScript
+> CLI `@codyswann/aws-soc2-setup`. Reinterpret prompts against `src/` / Vitest rather than `*.sh`
+> paths, or treat this file as archived planning notes.
+
 ## Overview
 This document provides a structured prompt chain for upgrading the AWS Control Tower SOC 2 Automation Suite to enterprise-grade standards while maintaining the ability to completely rollback all changes for testing purposes.
 

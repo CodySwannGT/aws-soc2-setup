@@ -6,23 +6,23 @@
 ## Orientation
 | Page | Summary | Updated |
 |---|---|---|
-| [start-here](start-here.md) | Orientation and the wiki's purpose | 2026-05-28 |
+| [start-here](start-here.md) | Orientation and the wiki's purpose | 2026-07-09 |
 | [LLM Wiki Contract](schema/llm-wiki-contract.md) | The rules this wiki follows | 2026-05-28 |
 
 ## Projects
 | Page | Summary | Updated |
 |---|---|---|
-| [AWS Control Tower SOC 2 Automation Suite](projects/aws-soc2-automation-suite.md) | The suite, its entry point, and component scripts | 2026-05-28 |
+| [AWS Control Tower SOC 2 Automation Suite](projects/aws-soc2-automation-suite.md) | Open-source TypeScript CLI (`aws-soc2-setup`), domains, and entry points | 2026-07-09 |
 
 ## Architecture
 | Page | Summary | Updated |
 |---|---|---|
-| [Multi-account AWS Control Tower architecture](architecture/multi-account-control-tower.md) | Account structure, identity, security services, root protection | 2026-05-28 |
+| [Multi-account AWS Control Tower architecture](architecture/multi-account-control-tower.md) | Account structure, identity, security services, root protection, CLI layout | 2026-07-09 |
 
 ## Requirements
 | Page | Summary | Updated |
 |---|---|---|
-| [SOC 2 controls implemented by the suite](requirements/soc2-controls.md) | The SOC 2 controls the suite enforces | 2026-05-28 |
+| [SOC 2 controls implemented by the suite](requirements/soc2-controls.md) | SOC 2–oriented technical controls the CLI helps implement | 2026-07-09 |
 
 ## Staff
 | Page | Summary | Updated |
@@ -40,3 +40,4 @@
 |---|---|
 | `sources/git/` | [2026-05-28 git history](sources/git/2026-05-28-aws-soc2-setup-git.md) |
 | `sources/roles/` | [2026-05-28 roster](sources/roles/2026-05-28-roles.md) |
+| `sources/memory/` | [2026-07-09 TypeScript CLI / OSS](sources/memory/2026-07-09-typescript-cli-oss.md) |

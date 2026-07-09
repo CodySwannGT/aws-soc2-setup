@@ -1,37 +1,44 @@
 ---
 type: project
 created: 2026-05-28
-updated: 2026-05-28
+updated: 2026-07-09
 related: [architecture/multi-account-control-tower.md, requirements/soc2-controls.md]
-sources: [sources/git/2026-05-28-aws-soc2-setup-git.md]
-sensitivity: internal
+sources: [sources/git/2026-05-28-aws-soc2-setup-git.md, sources/memory/2026-07-09-typescript-cli-oss.md]
+sensitivity: public
 ---
 
 # AWS Control Tower SOC 2 Automation Suite
 
 ## What it is
-A collection of interconnected Bash scripts that automate and guide the creation of a secure,
-SOC 2 compliant, multi-account AWS environment using AWS Control Tower with minimal manual
-intervention. It reduces the typically 8–16 hour manual setup into a streamlined, repeatable,
-skip-friendly workflow.
+An open-source TypeScript CLI (`aws-soc2-setup`, npm package `@codyswann/aws-soc2-setup`) that
+automates and guides creation of a SOC 2–aligned multi-account AWS environment using AWS Control
+Tower. It replaces the earlier Bash suite with AWS SDK v3 domain modules while keeping the same
+skip-friendly, step-ordered workflow.
+
+Source: `wiki/sources/memory/2026-07-09-typescript-cli-oss.md`.
 
 ## Entry point
-`master_control_tower_setup.sh` orchestrates the suite. Parameters: `-a ACCOUNT_ID`,
-`-p PROFILE` (default `sampleproject`), `-d ADMIN_PROFILE`, `-r REGION` (default `us-east-1`),
-`-h` help. The process is skip-friendly — it can resume from any step.
+Binary: `aws-soc2-setup` (local: `./bin/aws-soc2-setup.js` after `bun run build`).
 
-## Component scripts
-The suite ships focused scripts including: `configure_sso_profile.sh`, `create_sso_user.sh`,
-`add_all_users_to_group.sh`, `manage_sso_group.sh`, `assign_sso_permissions.sh`,
-`create_organizational_units.sh`, `provision_account.sh`, `enable_control_tower_controls.sh`,
-`enable_security_services.sh`, `configure_audit_reporting.sh`, `configure_aws_backup.sh`,
-`manage_kms_keys.sh`, `delete_root_user_access_key.sh`, `remove_root_access.sh`,
-`update_identity_center_start_url.sh`.
+Global options: `-p/--profile`, `-r/--region`, `--dry-run`, `-y/--yes`.
+
+Primary orchestrator: `aws-soc2-setup setup` — prints the 16-step plan and runs automatable steps.
+Readiness: `aws-soc2-setup status`. Identity preflight: `aws-soc2-setup whoami`.
+
+## Command domains
+| Domain | Role |
+| --- | --- |
+| `sso` | IAM Identity Center users, groups, assignments, profile / start URL |
+| `controltower` | OUs, Account Factory provisioning, Control Tower controls |
+| `security` | GuardDuty, Security Hub, Config, Macie, Inspector, Audit Manager |
+| `backup` | AWS Backup vault/plan and delegated admin |
+| `kms` | Key administrators and rotation |
+| `root` | Delete root access keys; org-wide root credential removal |
 
 ## Prerequisites
-AWS root account with admin access, AWS CLI configured, `jq`, a Bash shell, and basic AWS
-familiarity.
+Node.js 18+, AWS credentials (CLI profile or default chain), and an account where Organizations /
+Control Tower can be enabled. Development uses Bun.
 
 ## Status
-Repository under `CodySwannGT/aws-soc2-setup`. Recent history added `@codyswann/lisa` as a dev
-dependency (PR #1). See `sources/git/2026-05-28-aws-soc2-setup-git.md` for commit history.
+Repository `CodySwannGT/aws-soc2-setup`. Published as open source under the MIT license. Bash
+scripts were removed in the TypeScript conversion (`35083e0`).

@@ -1,7 +1,11 @@
 # Start here — AWS Control Tower SOC 2 Automation Suite Wiki
 
 ## Purpose
-The durable knowledge base for the AWS Control Tower SOC 2 Automation Suite — a collection of interconnected scripts that automate and guide the creation of a secure, SOC 2 compliant, multi-account AWS environment using AWS Control Tower. It captures the suite's setup workflow, multi-account architecture, IAM Identity Center integration, SOC 2 security controls, organizational structure, root-account protection, and the decisions and playbooks behind them.
+The durable knowledge base for the AWS Control Tower SOC 2 Automation Suite — an open-source
+TypeScript CLI (`aws-soc2-setup`) that automates and guides creation of a secure, SOC 2–aligned,
+multi-account AWS environment using AWS Control Tower. It captures the suite's setup workflow,
+multi-account architecture, IAM Identity Center integration, SOC 2–oriented security controls,
+organizational structure, root-account protection, and the decisions and playbooks behind them.
 
 ## What this is
 A git-native LLM Wiki owned by **aws-soc2-setup** and maintained by the `lisa-wiki` kernel. It is the

@@ -1,263 +1,110 @@
 # Contributing to AWS Control Tower SOC 2 Automation Suite
 
-First of all, thank you for considering contributing to this project! Your time and expertise help make this automation suite more valuable for everyone building secure AWS environments.
+Thank you for considering a contribution. This project is an open-source TypeScript CLI (`aws-soc2-setup`) that helps teams bootstrap SOC 2–aligned AWS Control Tower environments.
 
-This document provides guidelines and instructions for contributing to this project. By participating, you are expected to uphold this code and help us maintain a welcoming and inclusive environment.
+By participating, you agree to uphold our [Code of Conduct](CODE_OF_CONDUCT.md).
 
-## 📋 Table of Contents
+## Table of contents
 
-- [Code of Conduct](#code-of-conduct)
-- [Getting Started](#getting-started)
-- [How Can I Contribute?](#how-can-i-contribute)
-  - [Reporting Bugs](#reporting-bugs)
-  - [Suggesting Enhancements](#suggesting-enhancements)
-  - [Pull Requests](#pull-requests)
-- [Development Workflow](#development-workflow)
-- [Coding Standards](#coding-standards)
-- [Testing Guidelines](#testing-guidelines)
-- [Security Best Practices](#security-best-practices)
+- [Getting started](#getting-started)
+- [How to contribute](#how-to-contribute)
+- [Development workflow](#development-workflow)
+- [Coding standards](#coding-standards)
+- [Testing](#testing)
+- [Security](#security)
 - [Documentation](#documentation)
-- [Community](#community)
 
-## Code of Conduct
+## Getting started
 
-This project and everyone participating in it are governed by our [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior to [conduct@example.com](mailto:conduct@example.com).
+1. Fork [CodySwannGT/aws-soc2-setup](https://github.com/CodySwannGT/aws-soc2-setup).
+2. Clone your fork and add upstream:
+   ```bash
+   git clone https://github.com/<you>/aws-soc2-setup.git
+   cd aws-soc2-setup
+   git remote add upstream https://github.com/CodySwannGT/aws-soc2-setup.git
+   ```
+3. Install with Bun (required by `package.json` engines):
+   ```bash
+   bun install
+   bun run build
+   ```
+4. Use a dedicated AWS sandbox account for any live testing — never production.
 
-## Getting Started
+## How to contribute
 
-### Environment Setup
+### Bugs
 
-1. Ensure you have all [prerequisites](README.md#prerequisites) installed.
-2. Fork this repository.
-3. Clone your fork: `git clone https://github.com/yourusername/aws-controltower-soc2-automation.git`
-4. Add the original repository as an upstream remote: `git remote add upstream https://github.com/originalowner/aws-controltower-soc2-automation.git`
+Open a [GitHub issue](https://github.com/CodySwannGT/aws-soc2-setup/issues) with:
 
-### Development Environment
+- Clear title and reproduction steps
+- CLI version (`aws-soc2-setup --version`), Node version, region, and profile type (SSO vs keys)
+- Expected vs actual behavior
+- Relevant command output (redact account IDs / ARNs if needed)
 
-For consistent development, we recommend:
+### Enhancements
 
-- VS Code with shellcheck extension
-- AWS CLI version 2.x
-- A dedicated AWS sandbox environment for testing
+Same issue tracker. Explain the use case, which command domain it touches (`sso`, `controltower`, `security`, etc.), and any SOC 2 / security implications.
 
-## How Can I Contribute?
+### Pull requests
 
-### Reporting Bugs
+- Target `main`
+- Follow Conventional Commits
+- Include or update Vitest coverage for behavior changes
+- Update README / wiki when user-facing behavior changes
+- Do not commit secrets, credentials, or live account identifiers
 
-This section guides you through submitting a bug report. Following these guidelines helps maintainers and the community understand your report, reproduce the behavior, and find related reports.
+## Development workflow
 
-Before creating bug reports, please check [this list](https://github.com/yourusername/aws-controltower-soc2-automation/issues) to see if the problem has already been reported. When you are creating a bug report, please include as many details as possible.
-
-**How Do I Submit A (Good) Bug Report?**
-
-Bugs are tracked as [GitHub issues](https://github.com/yourusername/aws-controltower-soc2-automation/issues). Create an issue and provide the following information:
-
-* **Use a clear and descriptive title** for the issue to identify the problem.
-* **Describe the exact steps which reproduce the problem** in as many details as possible.
-* **Provide specific examples to demonstrate the steps**.
-* **Describe the behavior you observed after following the steps** and point out what exactly is the problem with that behavior.
-* **Explain which behavior you expected to see instead and why.**
-* **Include screenshots** if possible.
-* **Include your AWS environment details**: AWS region, AWS CLI version, and any specific AWS service limitations or configurations.
-* **If the problem wasn't triggered by a specific action**, describe what you were doing before the problem happened.
-
-### Suggesting Enhancements
-
-This section guides you through submitting an enhancement suggestion, including completely new features and minor improvements to existing functionality.
-
-**How Do I Submit A (Good) Enhancement Suggestion?**
-
-Enhancement suggestions are tracked as [GitHub issues](https://github.com/yourusername/aws-controltower-soc2-automation/issues). Create an issue and provide the following information:
-
-* **Use a clear and descriptive title** for the issue to identify the suggestion.
-* **Provide a step-by-step description of the suggested enhancement** in as many details as possible.
-* **Provide specific examples to demonstrate the steps** or point to similar implementations if applicable.
-* **Describe the current behavior** and **explain which behavior you expected to see instead** and why.
-* **Explain why this enhancement would be useful** to users of this automation suite.
-* **Specify which version of the automation suite you're using.**
-* **Specify the AWS services and features relevant to the request**.
-* **Include any considerations about how this might impact SOC 2 compliance**.
-
-### Pull Requests
-
-* Fill in the required PR template
-* Do not include issue numbers in the PR title
-* Include screenshots and animated GIFs in your PR whenever possible
-* Follow the [Bash styleguide](#bash-style-guide)
-* Include thoughtfully-worded, well-structured tests
-* Document new functionality in the README.md
-* End all files with a newline
-* Place script imports in the following order:
-  * Standard Bash functionality
-  * Related third-party packages
-  * Local modules and imports
-* Avoid platform-dependent code
-
-## Development Workflow
-
-1. Create a new branch from `main`: `git checkout -b feature/your-feature-name`
-2. Make your changes
-3. Test your changes (see [Testing Guidelines](#testing-guidelines))
-4. Commit your changes (see [Commit Messages](#commit-messages))
-5. Push to your fork: `git push origin feature/your-feature-name`
-6. [Submit a pull request](https://github.com/yourusername/aws-controltower-soc2-automation/compare)
-
-### Branch Naming Conventions
-
-* `feature/<feature-name>` - For new features
-* `fix/<bug-name>` - For bug fixes
-* `docs/<doc-change>` - For documentation updates
-* `refactor/<refactor-name>` - For code refactoring
-* `test/<test-name>` - For test additions or modifications
-
-### Commit Messages
-
-We follow [Conventional Commits](https://www.conventionalcommits.org/) specification:
-
-```
-<type>(<scope>): <description>
-
-[optional body]
-
-[optional footer(s)]
+```bash
+bun install
+bun run build
+bun run test
+bun run lint
+bun run typecheck
 ```
 
-Types:
-* `feat`: A new feature
-* `fix`: A bug fix
-* `docs`: Documentation only changes
-* `style`: Changes that do not affect the meaning of the code
-* `refactor`: A code change that neither fixes a bug nor adds a feature
-* `perf`: A code change that improves performance
-* `test`: Adding missing tests or correcting existing tests
-* `chore`: Changes to the build process or auxiliary tools
+Branch names: `feature/…`, `fix/…`, `docs/…`, `refactor/…`, `test/…`.
 
-Example:
+### Commit messages
+
+[Conventional Commits](https://www.conventionalcommits.org/):
+
 ```
-feat(security): add automatic rotation of IAM access keys
-
-Implements a new feature that automatically rotates IAM access keys 
-every 90 days to enhance security posture.
+feat(status): report Identity Center and OU readiness
 
 Closes #123
 ```
 
-## Coding Standards
+Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`.
 
-### Bash Style Guide
+## Coding standards
 
-1. **Script Header**: All scripts should start with a header:
-   ```bash
-   #!/bin/bash
-   # script_name.sh - Brief description
-   #
-   # Description:
-   #   Detailed description of what the script does
-   #
-   # Usage:
-   #   ./script_name.sh [options]
-   #
-   # Parameters:
-   #   -p PARAM   Description of parameter (required/optional)
-   #   -h         Display help message and exit
-   ```
+- TypeScript ESM under `src/`; tests under `tests/` mirroring the source tree
+- Commander for CLI wiring; domain logic stays out of `src/commands/` when possible
+- Shared helpers in `src/lib/` (config, AWS clients, logging, errors)
+- Prefer `CliError` for expected user-facing failures
+- Honor global `--dry-run` for mutating commands; require `--yes` for destructive `root` ops
+- Format/lint with the repo scripts (`bun run format`, `bun run lint`)
 
-2. **Indentation**: Use 4 spaces for indentation, not tabs.
+## Testing
 
-3. **Line Length**: Keep lines to a maximum of 80 characters when possible.
+- Unit tests with Vitest and `aws-sdk-client-mock`
+- Prefer injectable runners/gatherers for command handlers (see `setup` and `status`)
+- Manual live tests only in disposable sandbox accounts; clean up resources afterward
 
-4. **Variable Names**:
-   * Use lowercase with underscores for variables: `user_name`, not `userName`
-   * Use all uppercase for constants: `MAX_RETRIES`
-   * Use descriptive names: `aws_account_id` not `id`
+## Security
 
-5. **Functions**:
-   * Always use function keyword: `function my_function() { ... }`
-   * Include descriptive comments above each function
-   * Keep functions focused on a single task
-
-6. **Error Handling**:
-   * Check return codes after commands: `if ! command; then ...`
-   * Use descriptive error messages that include the failed command
-   * Direct error messages to stderr: `echo "Error message" >&2`
-
-7. **Command Substitution**:
-   * Use `$(command)` instead of backticks
-
-8. **Quote Variables**:
-   * Always quote variables: `"$variable"`, not $variable
-   * Exception: When you specifically need word splitting
-
-9. **Parameter Validation**:
-   * Validate all parameters at the beginning of scripts
-   * Provide meaningful error messages for invalid inputs
-
-10. **Comments**:
-    * Comment complex operations
-    * Avoid unnecessary comments for obvious operations
-    * Use `# TODO:` to mark future improvements
-
-### Security Standards
-
-1. Never hardcode credentials in scripts
-2. Use the principle of least privilege for IAM roles and policies
-3. Always check user input for injection attacks
-4. Validate and sanitize all parameters
-5. Log security-relevant actions
-6. Avoid storing sensitive information in environment variables
-
-## Testing Guidelines
-
-### Manual Testing
-
-Before submitting your PR, manually test your changes in a development AWS environment. Document your testing methodology in the PR.
-
-Recommended test flow:
-1. Run each script individually with sample inputs
-2. Run the full automation sequence in a test account
-3. Verify the resulting AWS environment against SOC 2 requirements
-
-### Automated Testing
-
-For any new functionality:
-1. Add appropriate test cases in the `tests/` directory
-2. Ensure all existing tests pass with your changes
-
-### Test Account Safety
-
-When testing:
-1. Use a dedicated testing AWS account (never production)
-2. Be cautious about cost implications of your tests
-3. Clean up all resources after testing
-4. Document any specific test setup required in your PR
-
-## Security Best Practices
-
-Security is paramount in this project. When contributing, consider:
-
-1. **Least Privilege**: Any IAM roles or policies should follow the principle of least privilege
-2. **Secrets Management**: Never commit AWS credentials, secrets, or personal data
-3. **Input Validation**: Always validate user inputs to prevent injection attacks
-4. **Secure Defaults**: Default configurations should be secure by default
-5. **Auditability**: Actions should be logged appropriately for audit purposes
-6. **SOC 2 Alignment**: Changes should maintain or enhance SOC 2 compliance
+- Never hardcode credentials
+- Least privilege for any IAM / permission-set examples
+- Validate inputs before AWS calls
+- Assume changes may be reviewed for SOC 2 / privileged-access impact
 
 ## Documentation
 
-Good documentation is crucial for this project. When contributing:
-
-1. Update the README.md if your changes affect user-facing functionality
-2. Add comments to explain complex or non-obvious code sections
-3. Create or update wiki pages for architectural or implementation details
-4. Add examples if your feature requires specific usage patterns
-5. Include relevant AWS documentation links
-
-## Community
-
-### Communication Channels
-
-* GitHub Issues: For bug reports and feature requests
+- User-facing changes → `README.md` and often `docs/CHECKLIST.md`
+- Durable project knowledge → ingest into the [LLM Wiki](wiki/start-here.md) rather than only editing synthesis pages by hand when possible
+- Keep examples aligned with the TypeScript CLI (`aws-soc2-setup …`), not the retired Bash scripts
 
 ---
 
-Thank you for contributing to the AWS Control Tower SOC 2 Automation Suite! Your efforts help organizations build secure, compliant cloud environments more efficiently.
+Thanks for helping organizations bootstrap secure, compliant AWS environments more safely.
