@@ -180,7 +180,7 @@ export const findRegisteredOuBaseline = async (
  * baseline without calling EnableBaseline again.
  * @param context - AWS region/profile context.
  * @param ouArn - The target OU ARN.
- * @param baselineVersion - Baseline version (should match the landing zone, e.g. "4.0").
+ * @param baselineVersion - Baseline version compatible with the landing zone (e.g. "5.0" for LZ 4.0).
  * @returns Registration result.
  */
 export const registerOrganizationalUnit = async (

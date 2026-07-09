@@ -133,7 +133,7 @@ describe("controltower/baselines", () => {
     });
 
     await expect(
-      registerOrganizationalUnit(CTX, OU_ARN, "4.0")
+      registerOrganizationalUnit(CTX, OU_ARN, "5.0")
     ).resolves.toEqual({
       ouArn: OU_ARN,
       enabledBaselineArn: ENABLED_ARN,
@@ -162,7 +162,7 @@ describe("controltower/baselines", () => {
     });
 
     await expect(
-      registerOrganizationalUnit(CTX, OU_ARN, "4.0")
+      registerOrganizationalUnit(CTX, OU_ARN, "5.0")
     ).resolves.toMatchObject({
       alreadyRegistered: false,
       operationIdentifier: "op-retry",
@@ -196,7 +196,7 @@ describe("controltower/baselines", () => {
     });
 
     await expect(
-      registerOrganizationalUnit(CTX, OU_ARN, "4.0")
+      registerOrganizationalUnit(CTX, OU_ARN, "5.0")
     ).resolves.toEqual({
       ouArn: OU_ARN,
       enabledBaselineArn: ENABLED_ARN,
@@ -207,7 +207,7 @@ describe("controltower/baselines", () => {
     const call = ctMock.commandCalls(EnableBaselineCommand)[0];
     expect(call?.args[0].input).toMatchObject({
       baselineIdentifier: CT_BASELINE_ARN,
-      baselineVersion: "4.0",
+      baselineVersion: "5.0",
       targetIdentifier: OU_ARN,
       parameters: [
         {
@@ -229,7 +229,7 @@ describe("controltower/baselines", () => {
     });
 
     await expect(
-      registerOrganizationalUnit(CTX, OU_ARN, "4.0")
+      registerOrganizationalUnit(CTX, OU_ARN, "5.0")
     ).resolves.toMatchObject({ alreadyRegistered: false });
 
     const call = ctMock.commandCalls(EnableBaselineCommand)[0];
