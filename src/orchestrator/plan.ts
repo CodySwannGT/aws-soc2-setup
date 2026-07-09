@@ -10,8 +10,8 @@ export interface SetupStep {
 }
 
 /**
- * The ordered setup plan, mirroring master_control_tower_setup.sh. Console-only
- * steps are `manual`; the rest map to this CLI's commands.
+ * The ordered setup plan for `aws-soc2-setup setup`. Console-only steps are
+ * `manual`; the rest map to this CLI's domain commands.
  */
 export const SETUP_PLAN: SetupStep[] = [
   {

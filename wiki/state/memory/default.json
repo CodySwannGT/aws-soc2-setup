@@ -1,0 +1,18 @@
+{
+  "connector": "memory",
+  "profile": "default",
+  "lastSuccessfulRunAt": "2026-07-09T12:00:00.000Z",
+  "cursor": {
+    "lastNote": "2026-07-09-typescript-cli-oss"
+  },
+  "sourceNotes": [
+    "wiki/sources/memory/2026-07-09-typescript-cli-oss.md"
+  ],
+  "synthesisPages": [
+    "wiki/projects/aws-soc2-automation-suite.md",
+    "wiki/architecture/multi-account-control-tower.md",
+    "wiki/requirements/soc2-controls.md",
+    "wiki/start-here.md"
+  ],
+  "schemaVersion": "1.0.0"
+}
