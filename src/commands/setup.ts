@@ -12,6 +12,7 @@ import {
   type EnableControlsOptions,
 } from "./controltower-controls.js";
 import { handleCreateOus, type CreateOusOptions } from "./controltower.js";
+import { handleCreateOrganization } from "./controltower-organization.js";
 import {
   handleSecurityAudit,
   type SecurityAuditOptions,
@@ -31,6 +32,7 @@ export interface SetupOptions {
 
 /** The automatable step handlers, injectable so the orchestration is testable. */
 export interface SetupRunners {
+  createOrganization: (g: GlobalOptions) => Promise<void>;
   createOus: (g: GlobalOptions, o: CreateOusOptions) => Promise<void>;
   enableSecurity: (g: GlobalOptions, o: SecurityEnableOptions) => Promise<void>;
   enableControls: (g: GlobalOptions, o: EnableControlsOptions) => Promise<void>;
@@ -39,6 +41,7 @@ export interface SetupRunners {
 }
 
 const defaultRunners: SetupRunners = {
+  createOrganization: handleCreateOrganization,
   createOus: handleCreateOus,
   enableSecurity: handleSecurityEnable,
   enableControls: handleEnableControls,
@@ -61,6 +64,7 @@ const runAutomated = async (
   options: SetupOptions,
   runners: SetupRunners
 ): Promise<void> => {
+  await runners.createOrganization(globals);
   await runners.createOus(globals, { all: true });
   await runners.enableSecurity(globals, { all: true });
   if (options.ou) {
@@ -118,10 +122,10 @@ export const registerSetup = (program: Command): void => {
     .description(
       "Orchestrate the SOC 2 Control Tower setup (plan + automatable steps)"
     )
-    .option("--ou <ouId>", "OU id for Control Tower controls (step 10)")
-    .option("--central-account <id>", "Central backup account id (step 11)")
-    .option("--admin-account <id>", "Backup administrator account id (step 11)")
-    .option("--audit-account <id>", "Audit account id (step 12)")
+    .option("--ou <ouId>", "OU id for Control Tower controls (step 11)")
+    .option("--central-account <id>", "Central backup account id (step 12)")
+    .option("--admin-account <id>", "Backup administrator account id (step 12)")
+    .option("--audit-account <id>", "Audit account id (step 13)")
     .action(async (options: SetupOptions) => {
       await runAction(async () => {
         await handleSetup(

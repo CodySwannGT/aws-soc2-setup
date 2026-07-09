@@ -52,7 +52,9 @@ const writeNextSteps = (status: EnvironmentStatus): void => {
     if (check.id === "identity") {
       info("  - Configure credentials, then retry (`aws-soc2-setup whoami`).");
     } else if (check.id === "organization") {
-      info("  - Enable AWS Organizations / Control Tower in the console.");
+      info(
+        "  - Create the org: `aws-soc2-setup controltower create-organization`."
+      );
     } else if (check.id === "ous") {
       info("  - Create OUs: `aws-soc2-setup controltower create-ous --all`.");
     } else if (check.id === "identity-center") {

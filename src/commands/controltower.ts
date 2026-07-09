@@ -12,6 +12,7 @@ import {
 } from "../controltower/organizations.js";
 
 import { registerEnableControls } from "./controltower-controls.js";
+import { registerCreateOrganization } from "./controltower-organization.js";
 import { registerProvision } from "./controltower-provision.js";
 
 /** Options for `controltower create-ous`. */
@@ -103,7 +104,8 @@ export const handleCreateOus = async (
 };
 
 /**
- * Register the `controltower` command group (create-ous, provision-account).
+ * Register the `controltower` command group (create-organization, create-ous,
+ * provision-account, enable-controls).
  * @param program - The root commander program to attach the commands to.
  */
 export const registerControlTower = (program: Command): void => {
@@ -111,7 +113,11 @@ export const registerControlTower = (program: Command): void => {
     resolveGlobalOptions(program.opts<GlobalFlags>());
   const controltower = program
     .command("controltower")
-    .description("Manage AWS Control Tower OUs and account provisioning");
+    .description(
+      "Manage AWS Organizations, Control Tower OUs, and account provisioning"
+    );
+
+  registerCreateOrganization(controltower, globals);
 
   controltower
     .command("create-ous")
