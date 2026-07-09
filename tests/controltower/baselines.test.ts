@@ -77,6 +77,13 @@ describe("controltower/baselines", () => {
     );
   });
 
+  it("findIdentityCenterEnabledBaselineArn returns undefined when IC baseline is absent", async () => {
+    ctMock.on(ListBaselinesCommand).resolves({ baselines: [] });
+    await expect(findIdentityCenterEnabledBaselineArn(CTX)).resolves.toBe(
+      undefined
+    );
+  });
+
   it("findRegisteredOuBaseline returns an existing OU registration", async () => {
     ctMock.on(ListBaselinesCommand).resolves({
       baselines: [{ arn: CT_BASELINE_ARN, name: CONTROL_TOWER_BASELINE_NAME }],
@@ -100,6 +107,16 @@ describe("controltower/baselines", () => {
     });
   });
 
+  it("findRegisteredOuBaseline returns undefined when the OU is not registered", async () => {
+    ctMock.on(ListBaselinesCommand).resolves({
+      baselines: [{ arn: CT_BASELINE_ARN, name: CONTROL_TOWER_BASELINE_NAME }],
+    });
+    ctMock.on(ListEnabledBaselinesCommand).resolves({ enabledBaselines: [] });
+    await expect(findRegisteredOuBaseline(CTX, OU_ARN)).resolves.toBe(
+      undefined
+    );
+  });
+
   it("registerOrganizationalUnit is idempotent when already registered", async () => {
     ctMock.on(ListBaselinesCommand).resolves({
       baselines: [{ arn: CT_BASELINE_ARN, name: CONTROL_TOWER_BASELINE_NAME }],
@@ -110,6 +127,7 @@ describe("controltower/baselines", () => {
           arn: ENABLED_ARN,
           baselineIdentifier: CT_BASELINE_ARN,
           targetIdentifier: OU_ARN,
+          statusSummary: { status: "SUCCEEDED" },
         },
       ],
     });
@@ -122,6 +140,34 @@ describe("controltower/baselines", () => {
       alreadyRegistered: true,
     });
     expect(ctMock.commandCalls(EnableBaselineCommand)).toHaveLength(0);
+  });
+
+  it("registerOrganizationalUnit retries when prior registration failed", async () => {
+    ctMock.on(ListBaselinesCommand).resolves({
+      baselines: [{ arn: CT_BASELINE_ARN, name: CONTROL_TOWER_BASELINE_NAME }],
+    });
+    ctMock.on(ListEnabledBaselinesCommand).resolves({
+      enabledBaselines: [
+        {
+          arn: ENABLED_ARN,
+          baselineIdentifier: CT_BASELINE_ARN,
+          targetIdentifier: OU_ARN,
+          statusSummary: { status: "FAILED" },
+        },
+      ],
+    });
+    ctMock.on(EnableBaselineCommand).resolves({
+      arn: "arn:aws:controltower:us-east-1:111122223333:enabledbaseline/retry",
+      operationIdentifier: "op-retry",
+    });
+
+    await expect(
+      registerOrganizationalUnit(CTX, OU_ARN, "4.0")
+    ).resolves.toMatchObject({
+      alreadyRegistered: false,
+      operationIdentifier: "op-retry",
+    });
+    expect(ctMock.commandCalls(EnableBaselineCommand)).toHaveLength(1);
   });
 
   it("registerOrganizationalUnit enables the baseline with Identity Center param", async () => {
@@ -172,6 +218,24 @@ describe("controltower/baselines", () => {
     });
   });
 
+  it("registerOrganizationalUnit omits IC param when IC baseline is absent", async () => {
+    ctMock.on(ListBaselinesCommand).resolves({
+      baselines: [{ arn: CT_BASELINE_ARN, name: CONTROL_TOWER_BASELINE_NAME }],
+    });
+    ctMock.on(ListEnabledBaselinesCommand).resolves({ enabledBaselines: [] });
+    ctMock.on(EnableBaselineCommand).resolves({
+      arn: ENABLED_ARN,
+      operationIdentifier: "op-no-ic",
+    });
+
+    await expect(
+      registerOrganizationalUnit(CTX, OU_ARN, "4.0")
+    ).resolves.toMatchObject({ alreadyRegistered: false });
+
+    const call = ctMock.commandCalls(EnableBaselineCommand)[0];
+    expect(call?.args[0].input.parameters).toBeUndefined();
+  });
+
   it("waitForBaselineOperation returns the terminal status", async () => {
     ctMock
       .on(GetBaselineOperationCommand)
@@ -179,11 +243,21 @@ describe("controltower/baselines", () => {
         baselineOperation: { status: "IN_PROGRESS" },
       })
       .resolvesOnce({
-        baselineOperation: { status: "SUCCEEDED" },
+        baselineOperation: { status: "FAILED" },
       });
 
     await expect(
       waitForBaselineOperation(CTX, "op-123", async () => undefined, 5)
-    ).resolves.toBe("SUCCEEDED");
+    ).resolves.toBe("FAILED");
+  });
+
+  it("waitForBaselineOperation times out when remaining attempts are exhausted", async () => {
+    ctMock.on(GetBaselineOperationCommand).resolves({
+      baselineOperation: { status: "IN_PROGRESS" },
+    });
+
+    await expect(
+      waitForBaselineOperation(CTX, "op-timeout", async () => undefined, 1)
+    ).rejects.toBeInstanceOf(CliError);
   });
 });

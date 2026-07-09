@@ -131,16 +131,21 @@ const listEnabledBaselines = async (
 /**
  * Find the enabled Identity Center baseline ARN for the management account
  * (required as a parameter when enabling AWSControlTowerBaseline).
+ * Optional: returns undefined when the Identity Center baseline is not in the
+ * catalog or has not been enabled yet.
  * @param context - AWS region/profile context.
  * @returns The enabled Identity Center baseline ARN, if present.
  */
 export const findIdentityCenterEnabledBaselineArn = async (
   context: ControlTowerContext
 ): Promise<string | undefined> => {
-  const identityCenterBaselineArn = await findBaselineArn(
-    context,
-    IDENTITY_CENTER_BASELINE_NAME
-  );
+  const baselines = await listAllBaselines(context);
+  const identityCenterBaselineArn = baselines.find(
+    baseline => baseline.name === IDENTITY_CENTER_BASELINE_NAME
+  )?.arn;
+  if (!identityCenterBaselineArn) {
+    return undefined;
+  }
   const enabled = await listEnabledBaselines(context, {
     baselineIdentifiers: [identityCenterBaselineArn],
   });
@@ -184,7 +189,7 @@ export const registerOrganizationalUnit = async (
   baselineVersion: string
 ): Promise<RegisteredOu> => {
   const existing = await findRegisteredOuBaseline(context, ouArn);
-  if (existing) {
+  if (existing?.status === "SUCCEEDED") {
     return {
       ouArn,
       enabledBaselineArn: existing.arn,
@@ -255,6 +260,7 @@ export const waitForBaselineOperation = async (
     new GetBaselineOperationCommand({ operationIdentifier })
   );
   const status = result.baselineOperation?.status;
+  // BaselineOperationStatus is IN_PROGRESS | SUCCEEDED | FAILED (no UNDER_CHANGE).
   if (status && status !== "IN_PROGRESS") {
     return status;
   }

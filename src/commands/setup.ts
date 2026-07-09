@@ -131,10 +131,13 @@ export const registerSetup = (program: Command): void => {
     .description(
       "Orchestrate the SOC 2 Control Tower setup (plan + automatable steps)"
     )
-    .option("--ou <ouId>", "OU id for Control Tower controls (step 11)")
-    .option("--central-account <id>", "Central backup account id (step 12)")
-    .option("--admin-account <id>", "Backup administrator account id (step 12)")
-    .option("--audit-account <id>", "Audit account id (step 13)")
+    .option(
+      "--ou <ouId>",
+      "OU id for Control Tower registration and controls (steps 10, 12)"
+    )
+    .option("--central-account <id>", "Central backup account id (step 13)")
+    .option("--admin-account <id>", "Backup administrator account id (step 13)")
+    .option("--audit-account <id>", "Audit account id (step 14)")
     .action(async (options: SetupOptions) => {
       await runAction(async () => {
         await handleSetup(
