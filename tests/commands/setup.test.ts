@@ -13,6 +13,7 @@ const globals = (over: Partial<GlobalOptions> = {}): GlobalOptions => ({
 });
 
 const makeRunners = (): SetupRunners => ({
+  createOrganization: vi.fn().mockResolvedValue(undefined),
   createOus: vi.fn().mockResolvedValue(undefined),
   enableSecurity: vi.fn().mockResolvedValue(undefined),
   enableControls: vi.fn().mockResolvedValue(undefined),
@@ -21,11 +22,15 @@ const makeRunners = (): SetupRunners => ({
 });
 
 describe("SETUP_PLAN", () => {
-  it("documents all sixteen ordered steps", () => {
-    expect(SETUP_PLAN).toHaveLength(16);
+  it("documents all seventeen ordered steps", () => {
+    expect(SETUP_PLAN).toHaveLength(17);
     expect(SETUP_PLAN.map(step => step.number)).toEqual(
-      Array.from({ length: 16 }, (_, i) => i + 1)
+      Array.from({ length: 17 }, (_, i) => i + 1)
     );
+    expect(SETUP_PLAN.find(step => step.number === 3)).toMatchObject({
+      title: "Create AWS Organizations",
+      kind: "automated",
+    });
   });
 });
 
@@ -38,6 +43,7 @@ describe("handleSetup", () => {
     vi.spyOn(process.stdout, "write").mockReturnValue(true);
     const runners = makeRunners();
     await handleSetup(globals({ dryRun: true }), {}, runners);
+    expect(runners.createOrganization).not.toHaveBeenCalled();
     expect(runners.createOus).not.toHaveBeenCalled();
   });
 
@@ -45,6 +51,7 @@ describe("handleSetup", () => {
     vi.spyOn(process.stdout, "write").mockReturnValue(true);
     const runners = makeRunners();
     await handleSetup(globals(), {}, runners);
+    expect(runners.createOrganization).toHaveBeenCalledTimes(1);
     expect(runners.createOus).toHaveBeenCalledWith(expect.anything(), {
       all: true,
     });

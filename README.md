@@ -110,9 +110,10 @@ aws-soc2-setup setup -p your-admin-profile \
 | --- | --- |
 | `status` | Read-only readiness: credentials, Organizations, recommended OUs, Identity Center, member accounts |
 | `whoami` | Print STS caller identity |
-| `setup` | Print the 16-step plan and run automatable steps |
+| `setup` | Print the 17-step plan and run automatable steps |
 | `sso create-user` / `group` / `assign` | Identity Center users, groups, permission sets |
 | `sso configure-profile` / `set-start-url` | Local SSO profile and start URL |
+| `controltower create-organization` | Create AWS Organizations (`FeatureSet=ALL`) if missing |
 | `controltower create-ous` | Create Infrastructure / Workloads / Sandbox OUs |
 | `controltower provision-account` | Account Factory provisioning (`--wait` supported) |
 | `controltower enable-controls` | Enable Control Tower controls for an OU |
@@ -132,20 +133,21 @@ Run `aws-soc2-setup <command> --help` for flags on each subcommand.
 | --- | --- | --- |
 | 1 | Initial AWS CLI / SSO profile setup | Manual (`sso configure-profile`) |
 | 2 | Enable MFA for the root user | Manual (console) |
-| 3 | Enable IAM Identity Center | Manual (console) |
-| 4 | Set up AWS Control Tower landing zone | Manual (console) |
-| 5 | Create the admin user | Manual (`sso create-user`, `sso assign`, `root delete-keys`) |
-| 6 | Create the initial users group | Manual (`sso group`) |
-| 7 | Create additional users | Manual (`sso create-user` / `sso group`) |
-| 8 | Create organizational units | Automated (`controltower create-ous --all`) |
-| 9 | Enable security services | Automated (`security enable --all`) |
-| 10 | Enable Control Tower controls | Automated (`controltower enable-controls`) |
-| 11 | Configure AWS Backup | Automated (`backup`) |
-| 12 | Configure audit and reporting | Automated (`security audit`) |
-| 13 | Provision additional accounts | Manual (`controltower provision-account`) |
-| 14 | Custom Identity Center domain | Manual (`sso set-start-url`) |
-| 15 | Disable root access for sub-accounts | Manual (`root remove-access --yes`) |
-| 16 | Configure KMS key management | Manual (`kms`) |
+| 3 | Create AWS Organizations | Automated (`controltower create-organization`) |
+| 4 | Enable IAM Identity Center | Manual (console) |
+| 5 | Set up AWS Control Tower landing zone | Manual (console) |
+| 6 | Create the admin user | Manual (`sso create-user`, `sso assign`, `root delete-keys`) |
+| 7 | Create the initial users group | Manual (`sso group`) |
+| 8 | Create additional users | Manual (`sso create-user` / `sso group`) |
+| 9 | Create organizational units | Automated (`controltower create-ous --all`) |
+| 10 | Enable security services | Automated (`security enable --all`) |
+| 11 | Enable Control Tower controls | Automated (`controltower enable-controls`) |
+| 12 | Configure AWS Backup | Automated (`backup`) |
+| 13 | Configure audit and reporting | Automated (`security audit`) |
+| 14 | Provision additional accounts | Manual (`controltower provision-account`) |
+| 15 | Custom Identity Center domain | Manual (`sso set-start-url`) |
+| 16 | Disable root access for sub-accounts | Manual (`root remove-access --yes`) |
+| 17 | Configure KMS key management | Manual (`kms`) |
 
 Track progress with [`docs/CHECKLIST.md`](docs/CHECKLIST.md).
 

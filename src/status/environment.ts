@@ -1,5 +1,4 @@
 import {
-  DescribeOrganizationCommand,
   ListOrganizationalUnitsForParentCommand,
   ListRootsCommand,
   OrganizationsClient,
@@ -9,6 +8,7 @@ import {
   SSOAdminClient,
 } from "@aws-sdk/client-sso-admin";
 
+import { describeOrganization } from "../controltower/organizations.js";
 import { buildClientConfig } from "../lib/aws.js";
 import type { GlobalOptions } from "../lib/config.js";
 import type { CallerIdentity } from "../lib/sts.js";
@@ -107,31 +107,27 @@ const probeOrganization = async (
   check: StatusCheck;
 }> => {
   try {
-    const result = await orgClient(context).send(
-      new DescribeOrganizationCommand({})
-    );
-    const organizationId = result.Organization?.Id;
-    const managementAccountId = result.Organization?.MasterAccountId;
-    if (!organizationId) {
+    const organization = await describeOrganization(context);
+    if (!organization) {
       return {
         check: {
           id: "organization",
           label: LABEL_ORGANIZATION,
           state: "missing",
-          detail: "Organizations is not enabled or returned no id",
+          detail: "Account is not in an AWS Organization",
         },
       };
     }
     return {
-      organizationId,
-      managementAccountId,
+      organizationId: organization.id,
+      managementAccountId: organization.managementAccountId,
       check: {
         id: "organization",
         label: LABEL_ORGANIZATION,
         state: "ok",
-        detail: managementAccountId
-          ? `${organizationId} (management ${managementAccountId})`
-          : organizationId,
+        detail: organization.managementAccountId
+          ? `${organization.id} (management ${organization.managementAccountId})`
+          : organization.id,
       },
     };
   } catch (caught) {

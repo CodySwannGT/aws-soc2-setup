@@ -1,5 +1,8 @@
 import {
+  AWSOrganizationsNotInUseException,
+  CreateOrganizationCommand,
   CreateOrganizationalUnitCommand,
+  DescribeOrganizationCommand,
   ListOrganizationalUnitsForParentCommand,
   ListRootsCommand,
   OrganizationsClient,
@@ -16,6 +19,7 @@ import { mockClient } from "aws-sdk-client-mock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { handleCreateOus } from "../../src/commands/controltower.js";
+import { handleCreateOrganization } from "../../src/commands/controltower-organization.js";
 import { handleProvision } from "../../src/commands/controltower-provision.js";
 import type { GlobalOptions } from "../../src/lib/config.js";
 import { CliError } from "../../src/lib/errors.js";
@@ -27,6 +31,8 @@ const scMock = mockClient(ServiceCatalogClient);
 const PORTFOLIO_NAME = "AWS Control Tower Account Factory Portfolio";
 const PRODUCT_NAME = "AWS Control Tower Account Factory";
 const EMAIL = "prod@example.com";
+const ORG_ID = "o-abcdef1234";
+const MANAGEMENT_ACCOUNT = "111122223333";
 
 const globals = (over: Partial<GlobalOptions> = {}): GlobalOptions => ({
   region: "us-east-1",
@@ -36,6 +42,51 @@ const globals = (over: Partial<GlobalOptions> = {}): GlobalOptions => ({
 });
 
 const instantDelay = (): Promise<void> => Promise.resolve();
+
+const DRY_RUN_NO_AWS = "makes no AWS calls under --dry-run";
+
+describe("handleCreateOrganization", () => {
+  beforeEach(() => {
+    orgMock.reset();
+    vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it(DRY_RUN_NO_AWS, async () => {
+    await handleCreateOrganization(globals({ dryRun: true }));
+    expect(orgMock.commandCalls(DescribeOrganizationCommand)).toHaveLength(0);
+    expect(orgMock.commandCalls(CreateOrganizationCommand)).toHaveLength(0);
+  });
+
+  it("creates an organization when none exists", async () => {
+    orgMock.on(DescribeOrganizationCommand).rejects(
+      new AWSOrganizationsNotInUseException({
+        message: "not in use",
+        $metadata: {},
+      })
+    );
+    orgMock.on(CreateOrganizationCommand).resolves({
+      Organization: {
+        Id: ORG_ID,
+        MasterAccountId: MANAGEMENT_ACCOUNT,
+        FeatureSet: "ALL",
+      },
+    });
+    await handleCreateOrganization(globals());
+    expect(orgMock.commandCalls(CreateOrganizationCommand)).toHaveLength(1);
+  });
+
+  it("reports an existing organization without creating", async () => {
+    orgMock.on(DescribeOrganizationCommand).resolves({
+      Organization: { Id: ORG_ID, MasterAccountId: MANAGEMENT_ACCOUNT },
+    });
+    await handleCreateOrganization(globals());
+    expect(orgMock.commandCalls(CreateOrganizationCommand)).toHaveLength(0);
+  });
+});
 
 describe("handleCreateOus", () => {
   beforeEach(() => {
@@ -53,7 +104,7 @@ describe("handleCreateOus", () => {
     );
   });
 
-  it("makes no AWS calls under --dry-run", async () => {
+  it(DRY_RUN_NO_AWS, async () => {
     await handleCreateOus(globals({ dryRun: true }), { all: true });
     expect(orgMock.commandCalls(ListRootsCommand)).toHaveLength(0);
   });
@@ -95,7 +146,7 @@ describe("handleProvision", () => {
     ).rejects.toBeInstanceOf(CliError);
   });
 
-  it("makes no AWS calls under --dry-run", async () => {
+  it(DRY_RUN_NO_AWS, async () => {
     await handleProvision(globals({ dryRun: true }), {
       name: "Prod",
       email: EMAIL,
@@ -150,7 +201,11 @@ describe("registerControlTower", () => {
     );
     const subcommands = (ct?.commands ?? []).map(command => command.name());
     expect(subcommands).toEqual(
-      expect.arrayContaining(["create-ous", "provision-account"])
+      expect.arrayContaining([
+        "create-organization",
+        "create-ous",
+        "provision-account",
+      ])
     );
   });
 });
