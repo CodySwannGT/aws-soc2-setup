@@ -79,7 +79,7 @@ describe("handleRegisterOu", () => {
     expect(baselines.registerOrganizationalUnit).toHaveBeenCalledWith(
       expect.anything(),
       OU_ARN,
-      "4.0"
+      "5.0"
     );
     expect(wait).toHaveBeenCalledWith(expect.anything(), "op-1");
   });

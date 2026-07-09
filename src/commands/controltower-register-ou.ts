@@ -23,7 +23,7 @@ export interface RegisterOuOptions {
   wait?: boolean;
 }
 
-const DEFAULT_BASELINE_VERSION = "4.0";
+const DEFAULT_BASELINE_VERSION = "5.0";
 
 const resolveOuArn = async (
   globals: GlobalOptions,
@@ -136,7 +136,7 @@ export const registerRegisterOu = (
     )
     .option(
       "--baseline-version <version>",
-      "AWSControlTowerBaseline version (default: 4.0)",
+      "AWSControlTowerBaseline version (default: 5.0 for landing zone 4.0)",
       DEFAULT_BASELINE_VERSION
     )
     .option("--wait", "Wait for the baseline operation to finish")

@@ -73,7 +73,7 @@ aws-soc2-setup setup --dry-run -p <profile>
 ## Step 10 — Register OUs with Control Tower (automated)
 
 - [ ] `aws-soc2-setup controltower register-ou -o <ouId>` (repeat per OU; use `--wait` as needed)
-- [ ] Baseline version should match the landing zone (default `4.0`)
+- [ ] Baseline version must be compatible with the landing zone (default `5.0` for LZ 4.0)
 
 ## Step 11 — Enable security services (automated)
 
