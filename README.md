@@ -110,11 +110,12 @@ aws-soc2-setup setup -p your-admin-profile \
 | --- | --- |
 | `status` | Read-only readiness: credentials, Organizations, recommended OUs, Identity Center, member accounts |
 | `whoami` | Print STS caller identity |
-| `setup` | Print the 17-step plan and run automatable steps |
+| `setup` | Print the 18-step plan and run automatable steps |
 | `sso create-user` / `group` / `assign` | Identity Center users, groups, permission sets |
 | `sso configure-profile` / `set-start-url` | Local SSO profile and start URL |
 | `controltower create-organization` | Create AWS Organizations (`FeatureSet=ALL`) if missing |
 | `controltower create-ous` | Create Infrastructure / Workloads / Sandbox OUs |
+| `controltower register-ou` | Register an OU with Control Tower (`EnableBaseline`) |
 | `controltower provision-account` | Account Factory provisioning (`--wait` supported) |
 | `controltower enable-controls` | Enable Control Tower controls for an OU |
 | `security enable` | Enable GuardDuty, Security Hub, Config, Macie, Inspector |
@@ -140,14 +141,15 @@ Run `aws-soc2-setup <command> --help` for flags on each subcommand.
 | 7 | Create the initial users group | Manual (`sso group`) |
 | 8 | Create additional users | Manual (`sso create-user` / `sso group`) |
 | 9 | Create organizational units | Automated (`controltower create-ous --all`) |
-| 10 | Enable security services | Automated (`security enable --all`) |
-| 11 | Enable Control Tower controls | Automated (`controltower enable-controls`) |
-| 12 | Configure AWS Backup | Automated (`backup`) |
-| 13 | Configure audit and reporting | Automated (`security audit`) |
-| 14 | Provision additional accounts | Manual (`controltower provision-account`) |
-| 15 | Custom Identity Center domain | Manual (`sso set-start-url`) |
-| 16 | Disable root access for sub-accounts | Manual (`root remove-access --yes`) |
-| 17 | Configure KMS key management | Manual (`kms`) |
+| 10 | Register OUs with Control Tower | Automated (`controltower register-ou`) |
+| 11 | Enable security services | Automated (`security enable --all`) |
+| 12 | Enable Control Tower controls | Automated (`controltower enable-controls`) |
+| 13 | Configure AWS Backup | Automated (`backup`) |
+| 14 | Configure audit and reporting | Automated (`security audit`) |
+| 15 | Provision additional accounts | Manual (`controltower provision-account`) |
+| 16 | Custom Identity Center domain | Manual (`sso set-start-url`) |
+| 17 | Disable root access for sub-accounts | Manual (`root remove-access --yes`) |
+| 18 | Configure KMS key management | Manual (`kms`) |
 
 Track progress with [`docs/CHECKLIST.md`](docs/CHECKLIST.md).
 

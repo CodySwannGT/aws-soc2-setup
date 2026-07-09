@@ -14,6 +14,7 @@ import {
 import { registerEnableControls } from "./controltower-controls.js";
 import { registerCreateOrganization } from "./controltower-organization.js";
 import { registerProvision } from "./controltower-provision.js";
+import { registerRegisterOu } from "./controltower-register-ou.js";
 
 /** Options for `controltower create-ous`. */
 export interface CreateOusOptions {
@@ -105,7 +106,7 @@ export const handleCreateOus = async (
 
 /**
  * Register the `controltower` command group (create-organization, create-ous,
- * provision-account, enable-controls).
+ * register-ou, provision-account, enable-controls).
  * @param program - The root commander program to attach the commands to.
  */
 export const registerControlTower = (program: Command): void => {
@@ -132,6 +133,7 @@ export const registerControlTower = (program: Command): void => {
       });
     });
 
+  registerRegisterOu(controltower, globals);
   registerProvision(controltower, globals);
   registerEnableControls(controltower, globals);
 };

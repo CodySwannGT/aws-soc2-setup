@@ -69,42 +69,46 @@ aws-soc2-setup setup --dry-run -p <profile>
 ## Step 9 — Create organizational units (automated)
 
 - [ ] `aws-soc2-setup controltower create-ous --all`
-- [ ] Register OUs with Control Tower in the console if required
 
-## Step 10 — Enable security services (automated)
+## Step 10 — Register OUs with Control Tower (automated)
+
+- [ ] `aws-soc2-setup controltower register-ou -o <ouId>` (repeat per OU; use `--wait` as needed)
+- [ ] Baseline version should match the landing zone (default `4.0`)
+
+## Step 11 — Enable security services (automated)
 
 - [ ] `aws-soc2-setup security enable --all`
 
-## Step 11 — Enable Control Tower controls (automated)
+## Step 12 — Enable Control Tower controls (automated)
 
 - [ ] `aws-soc2-setup controltower enable-controls -o <ouId> ...`
 
-## Step 12 — Configure AWS Backup (automated)
+## Step 13 — Configure AWS Backup (automated)
 
 - [ ] `aws-soc2-setup backup -c <centralAccount> -a <adminAccount> ...`
 
-## Step 13 — Configure audit and reporting (automated)
+## Step 14 — Configure audit and reporting (automated)
 
 - [ ] Complete any required Audit Manager console setup
 - [ ] `aws-soc2-setup security audit --audit-account <id> ...`
 
-## Step 14 — Provision additional accounts (optional / manual)
+## Step 15 — Provision additional accounts (optional / manual)
 
 - [ ] `aws-soc2-setup controltower provision-account ...` (use `--wait` as needed)
 - [ ] Re-run `security enable` for new accounts
 - [ ] Assign group access to new accounts
 
-## Step 15 — Custom Identity Center domain (optional / manual)
+## Step 16 — Custom Identity Center domain (optional / manual)
 
 - [ ] Configure the custom domain in the console
 - [ ] `aws-soc2-setup sso set-start-url -p <profile> -d <domain>`
 
-## Step 16 — Disable root access for sub-accounts (manual / destructive)
+## Step 17 — Disable root access for sub-accounts (manual / destructive)
 
 - [ ] Review member accounts (`aws-soc2-setup status`)
 - [ ] `aws-soc2-setup root remove-access --yes`
 
-## Step 17 — Configure KMS key management (optional / manual)
+## Step 18 — Configure KMS key management (optional / manual)
 
 - [ ] `aws-soc2-setup kms -k <keyId> ...`
 
