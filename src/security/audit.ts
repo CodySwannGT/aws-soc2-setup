@@ -1,10 +1,7 @@
 import {
   AuditManagerClient,
   CreateAssessmentCommand,
-  GetAccountStatusCommand,
   ListAssessmentFrameworksCommand,
-  RegisterOrganizationAdminAccountCommand,
-  UpdateSettingsCommand,
 } from "@aws-sdk/client-auditmanager";
 import {
   ConfigServiceClient,
@@ -14,28 +11,27 @@ import {
 } from "@aws-sdk/client-config-service";
 import {
   DescribeOrganizationCommand,
-  EnableAWSServiceAccessCommand,
   OrganizationsClient,
-  RegisterDelegatedAdministratorCommand,
 } from "@aws-sdk/client-organizations";
 
 import { buildClientConfig } from "../lib/aws.js";
 import { info, success, warn } from "../lib/logger.js";
 
+import type { AuditManagerOptions } from "./audit-manager.js";
 import type { SecurityContext } from "./config.js";
 
-const AUDIT_MANAGER_PRINCIPAL = "auditmanager.amazonaws.com";
+export {
+  AUDIT_MANAGER_AVAILABILITY_DOC,
+  classifyAuditManagerError,
+  enableAuditManager,
+  type AuditManagerOutcome,
+} from "./audit-manager.js";
+
 const SOC2_FRAMEWORK_NAME = "SOC 2";
 const SOC2_AGGREGATOR_NAME = "SOC2-Config-Aggregator";
-const CONSOLE_SETUP_MARKER = "Please complete AWS Audit Manager setup";
 
 /** Inputs shared by the audit configuration steps. */
-export interface AuditOptions {
-  accountId: string;
-  bucket: string;
-  auditAccountId?: string;
-  isManagement: boolean;
-}
+export type AuditOptions = AuditManagerOptions;
 
 const auditClient = (context: SecurityContext): AuditManagerClient =>
   new AuditManagerClient(buildClientConfig(context));
@@ -60,128 +56,6 @@ export const isManagementAccount = async (
   } catch {
     return false;
   }
-};
-
-const auditManagerStatus = async (
-  context: SecurityContext
-): Promise<string | undefined> => {
-  try {
-    const result = await auditClient(context).send(
-      new GetAccountStatusCommand({})
-    );
-    return result.status;
-  } catch {
-    return undefined;
-  }
-};
-
-const tryOrg = async (op: () => Promise<unknown>): Promise<boolean> => {
-  try {
-    await op();
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const registerAuditAdmin = async (
-  context: SecurityContext,
-  options: AuditOptions
-): Promise<boolean> => {
-  if (options.isManagement && options.auditAccountId) {
-    const auditAccountId = options.auditAccountId;
-    await tryOrg(() =>
-      orgClient(context).send(
-        new EnableAWSServiceAccessCommand({
-          ServicePrincipal: AUDIT_MANAGER_PRINCIPAL,
-        })
-      )
-    );
-    return tryOrg(() =>
-      orgClient(context).send(
-        new RegisterDelegatedAdministratorCommand({
-          ServicePrincipal: AUDIT_MANAGER_PRINCIPAL,
-          AccountId: auditAccountId,
-        })
-      )
-    );
-  }
-  return tryOrg(() =>
-    auditClient(context).send(
-      new RegisterOrganizationAdminAccountCommand({
-        adminAccountId: options.accountId,
-      })
-    )
-  );
-};
-
-/**
- *
- */
-type AuditManagerOutcome = "enabled" | "needs-console" | "error";
-
-const updateAuditManagerSettings = async (
-  context: SecurityContext,
-  bucket: string
-): Promise<AuditManagerOutcome> => {
-  try {
-    await auditClient(context).send(
-      new UpdateSettingsCommand({
-        defaultAssessmentReportsDestination: {
-          destinationType: "S3",
-          destination: `s3://${bucket}`,
-        },
-      })
-    );
-    return "enabled";
-  } catch (caught) {
-    const message = caught instanceof Error ? caught.message : String(caught);
-    return message.includes(CONSOLE_SETUP_MARKER) ? "needs-console" : "error";
-  }
-};
-
-const reportAuditManagerOutcome = (outcome: AuditManagerOutcome): boolean => {
-  if (outcome === "enabled") {
-    success("Enabled AWS Audit Manager");
-    return true;
-  }
-  if (outcome === "needs-console") {
-    warn(
-      "AWS Audit Manager requires one-time console setup (Get started). Re-run after completing it."
-    );
-    return false;
-  }
-  warn("Failed to enable AWS Audit Manager; continuing");
-  return false;
-};
-
-const setupAuditManager = async (
-  context: SecurityContext,
-  options: AuditOptions
-): Promise<boolean> => {
-  await registerAuditAdmin(context, options);
-  return reportAuditManagerOutcome(
-    await updateAuditManagerSettings(context, options.bucket)
-  );
-};
-
-/**
- * Enable AWS Audit Manager: short-circuits if already active, otherwise registers
- * the (delegated) admin and points assessment reports at the audit bucket.
- * @param context - AWS region/profile context.
- * @param options - Account/bucket/delegation inputs.
- * @returns True if Audit Manager is enabled and ready for a framework.
- */
-export const enableAuditManager = async (
-  context: SecurityContext,
-  options: AuditOptions
-): Promise<boolean> => {
-  const status = await auditManagerStatus(context);
-  if (status === "ACTIVE") {
-    info("AWS Audit Manager is already enabled");
-    return true;
-  }
-  return setupAuditManager(context, options);
 };
 
 const findSoc2FrameworkId = async (
