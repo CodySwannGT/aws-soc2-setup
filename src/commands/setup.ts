@@ -22,6 +22,10 @@ import {
   type SecurityAuditOptions,
 } from "./security-audit.js";
 import {
+  handleConformancePacks,
+  type ConformancePacksOptions,
+} from "./security-conformance-packs.js";
+import {
   handleSecurityEnable,
   type SecurityEnableOptions,
 } from "./security.js";
@@ -40,6 +44,10 @@ export interface SetupRunners {
   createOus: (g: GlobalOptions, o: CreateOusOptions) => Promise<void>;
   registerOu: (g: GlobalOptions, o: RegisterOuOptions) => Promise<void>;
   enableSecurity: (g: GlobalOptions, o: SecurityEnableOptions) => Promise<void>;
+  deployConformancePacks: (
+    g: GlobalOptions,
+    o: ConformancePacksOptions
+  ) => Promise<void>;
   enableControls: (g: GlobalOptions, o: EnableControlsOptions) => Promise<void>;
   configureBackup: (g: GlobalOptions, o: BackupCommandOptions) => Promise<void>;
   configureAudit: (g: GlobalOptions, o: SecurityAuditOptions) => Promise<void>;
@@ -50,6 +58,7 @@ const defaultRunners: SetupRunners = {
   createOus: handleCreateOus,
   registerOu: handleRegisterOu,
   enableSecurity: handleSecurityEnable,
+  deployConformancePacks: handleConformancePacks,
   enableControls: handleEnableControls,
   configureBackup: handleBackup,
   configureAudit: handleSecurityAudit,
@@ -76,6 +85,7 @@ const runAutomated = async (
     await runners.registerOu(globals, { ou: options.ou, wait: true });
   }
   await runners.enableSecurity(globals, { all: true });
+  await runners.deployConformancePacks(globals, { preset: "recommended" });
   if (options.ou) {
     await runners.enableControls(globals, {
       ou: options.ou,
@@ -102,9 +112,9 @@ const runAutomated = async (
 
 /**
  * Execute `setup`: print the ordered SOC 2 setup plan and run the automatable
- * steps (OUs, OU registration, security services, controls, backup, audit) by
- * composing the domain commands. Manual/console steps are printed as guidance.
- * Honors `--dry-run` (plan only).
+ * steps (OUs, OU registration, security services, conformance packs, controls,
+ * backup, audit) by composing the domain commands. Manual/console steps are
+ * printed as guidance. Honors `--dry-run` (plan only).
  * @param globals - Resolved global options.
  * @param options - Inputs for the automatable steps.
  * @param runners - Step handlers (defaults to the real commands).

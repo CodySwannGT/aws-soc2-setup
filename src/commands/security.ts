@@ -15,6 +15,7 @@ import {
 } from "../security/detectors.js";
 
 import { registerSecurityAudit } from "./security-audit.js";
+import { registerConformancePacks } from "./security-conformance-packs.js";
 
 /** Options for `security enable`. */
 export interface SecurityEnableOptions {
@@ -124,7 +125,7 @@ export const handleSecurityEnable = async (
 };
 
 /**
- * Register the `security` command group (enable, audit).
+ * Register the `security` command group (enable, audit, conformance-packs).
  * @param program - The root commander program to attach the commands to.
  */
 export const registerSecurity = (program: Command): void => {
@@ -152,4 +153,5 @@ export const registerSecurity = (program: Command): void => {
     });
 
   registerSecurityAudit(security, globals);
+  registerConformancePacks(security, globals);
 };

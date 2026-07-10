@@ -110,7 +110,7 @@ aws-soc2-setup setup -p your-admin-profile \
 | --- | --- |
 | `status` | Read-only readiness: credentials, Organizations, recommended OUs, Identity Center, member accounts |
 | `whoami` | Print STS caller identity |
-| `setup` | Print the 18-step plan and run automatable steps |
+| `setup` | Print the 19-step plan and run automatable steps |
 | `sso create-user` / `group` / `assign` | Identity Center users, groups, permission sets |
 | `sso configure-profile` / `set-start-url` | Local SSO profile and start URL |
 | `controltower create-organization` | Create AWS Organizations (`FeatureSet=ALL`) if missing |
@@ -119,7 +119,8 @@ aws-soc2-setup setup -p your-admin-profile \
 | `controltower provision-account` | Account Factory provisioning (`--wait` supported) |
 | `controltower enable-controls` | Enable Control Tower controls for an OU |
 | `security enable` | Enable GuardDuty, Security Hub, Config, Macie, Inspector |
-| `security audit` | Audit Manager / SOC 2 framework / Config aggregator |
+| `security audit` | Config aggregator (+ Audit Manager only if already enabled; unavailable for new accounts after 2026-04-30) |
+| `security conformance-packs` | Deploy AWS Config sample Conformance Packs (CIS / WA Security / CT detective) |
 | `backup` | Configure AWS Backup (vault, plan, delegated admin) |
 | `kms` | Manage key administrators and rotation |
 | `root delete-keys` / `remove-access` | Root key deletion and org-wide root lockdown (`--yes` required) |
@@ -146,10 +147,11 @@ Run `aws-soc2-setup <command> --help` for flags on each subcommand.
 | 12 | Enable Control Tower controls | Automated (`controltower enable-controls`) |
 | 13 | Configure AWS Backup | Automated (`backup`) |
 | 14 | Configure audit and reporting | Automated (`security audit`) |
-| 15 | Provision additional accounts | Manual (`controltower provision-account`) |
-| 16 | Custom Identity Center domain | Manual (`sso set-start-url`) |
-| 17 | Disable root access for sub-accounts | Manual (`root remove-access --yes`) |
-| 18 | Configure KMS key management | Manual (`kms`) |
+| 15 | Deploy Config Conformance Packs | Automated (`security conformance-packs --preset recommended`) |
+| 16 | Provision additional accounts | Manual (`controltower provision-account`) |
+| 17 | Custom Identity Center domain | Manual (`sso set-start-url`) |
+| 18 | Disable root access for sub-accounts | Manual (`root remove-access --yes`) |
+| 19 | Configure KMS key management | Manual (`kms`) |
 
 Track progress with [`docs/CHECKLIST.md`](docs/CHECKLIST.md).
 
