@@ -119,7 +119,7 @@ aws-soc2-setup setup -p your-admin-profile \
 | `controltower provision-account` | Account Factory provisioning (`--wait` supported) |
 | `controltower enable-controls` | Enable Control Tower controls for an OU |
 | `security enable` | Enable GuardDuty, Security Hub, Config, Macie, Inspector |
-| `security audit` | Audit Manager / SOC 2 framework / Config aggregator |
+| `security audit` | Config aggregator (+ Audit Manager only if already enabled; unavailable for new accounts after 2026-04-30) |
 | `backup` | Configure AWS Backup (vault, plan, delegated admin) |
 | `kms` | Manage key administrators and rotation |
 | `root delete-keys` / `remove-access` | Root key deletion and org-wide root lockdown (`--yes` required) |
