@@ -81,7 +81,14 @@ const removeFromAll = async (
   accounts: MemberAccount[]
 ): Promise<void> => {
   for (const account of accounts) {
-    reportRemoval(await removeRootCredentials(globals, account.id), account);
+    try {
+      reportRemoval(await removeRootCredentials(globals, account.id), account);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      warn(
+        `Failed to remove root credentials for ${account.name} (${account.id}): ${message}`
+      );
+    }
   }
 };
 

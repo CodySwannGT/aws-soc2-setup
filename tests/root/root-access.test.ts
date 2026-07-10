@@ -94,6 +94,33 @@ describe("root/root-access", () => {
     expect(result?.cleared).toContain("console password");
   });
 
+  it("removeRootCredentials records SCP denials on list calls without throwing", async () => {
+    stsMock.on(AssumeRootCommand).resolves({
+      Credentials: {
+        AccessKeyId: "ASIA1",
+        SecretAccessKey: "secret",
+        SessionToken: "token",
+        Expiration: undefined,
+      },
+    });
+    iamMock.on(DeleteLoginProfileCommand).resolves({});
+    iamMock.on(ListAccessKeysCommand).resolves({ AccessKeyMetadata: [] });
+    iamMock
+      .on(ListSigningCertificatesCommand)
+      .rejects(new Error("explicit deny"));
+    iamMock.on(ListMFADevicesCommand).rejects(new Error("explicit deny"));
+
+    const result = await removeRootCredentials(CTX, MEMBER);
+
+    expect(result?.cleared).toContain("console password");
+    expect(
+      result?.failures.some(f => f.includes("list signing certificates"))
+    ).toBe(true);
+    expect(result?.failures.some(f => f.includes("list MFA devices"))).toBe(
+      true
+    );
+  });
+
   it("removeRootCredentials returns undefined when assume-root fails", async () => {
     stsMock.on(AssumeRootCommand).rejects(new Error("denied"));
     await expect(removeRootCredentials(CTX, MEMBER)).resolves.toBeUndefined();
