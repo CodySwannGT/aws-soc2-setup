@@ -171,11 +171,33 @@ const clearLoginProfile = (client: IAMClient): Promise<RootRemovalResult> =>
     "console password"
   );
 
+const listOrFail = async <T>(
+  op: () => Promise<T>,
+  label: string
+): Promise<{ value?: T; failure?: RootRemovalResult }> => {
+  try {
+    return { value: await op() };
+  } catch (error) {
+    return {
+      failure: {
+        cleared: [],
+        failures: [`${label}: ${errorMessage(error)}`],
+      },
+    };
+  }
+};
+
 const clearAccessKeys = async (
   client: IAMClient
 ): Promise<RootRemovalResult> => {
-  const listed = await client.send(new ListAccessKeysCommand({}));
-  const ids = (listed.AccessKeyMetadata ?? [])
+  const listed = await listOrFail(
+    () => client.send(new ListAccessKeysCommand({})),
+    "list access keys"
+  );
+  if (listed.failure || !listed.value) {
+    return listed.failure ?? EMPTY_RESULT;
+  }
+  const ids = (listed.value.AccessKeyMetadata ?? [])
     .map(key => key.AccessKeyId)
     .filter((id): id is string => Boolean(id));
   return reduceClears(ids, id =>
@@ -189,8 +211,14 @@ const clearAccessKeys = async (
 const clearSigningCertificates = async (
   client: IAMClient
 ): Promise<RootRemovalResult> => {
-  const listed = await client.send(new ListSigningCertificatesCommand({}));
-  const ids = (listed.Certificates ?? [])
+  const listed = await listOrFail(
+    () => client.send(new ListSigningCertificatesCommand({})),
+    "list signing certificates"
+  );
+  if (listed.failure || !listed.value) {
+    return listed.failure ?? EMPTY_RESULT;
+  }
+  const ids = (listed.value.Certificates ?? [])
     .map(cert => cert.CertificateId)
     .filter((id): id is string => Boolean(id));
   return reduceClears(ids, id =>
@@ -228,8 +256,14 @@ const clearMfaDevice = async (
 const clearMfaDevices = async (
   client: IAMClient
 ): Promise<RootRemovalResult> => {
-  const listed = await client.send(new ListMFADevicesCommand({}));
-  const serials = (listed.MFADevices ?? [])
+  const listed = await listOrFail(
+    () => client.send(new ListMFADevicesCommand({})),
+    "list MFA devices"
+  );
+  if (listed.failure || !listed.value) {
+    return listed.failure ?? EMPTY_RESULT;
+  }
+  const serials = (listed.value.MFADevices ?? [])
     .map(device => device.SerialNumber)
     .filter((serial): serial is string => Boolean(serial));
   return reduceClears(serials, serial => clearMfaDevice(client, serial));
