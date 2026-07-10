@@ -89,26 +89,33 @@ aws-soc2-setup setup --dry-run -p <profile>
 
 ## Step 14 — Configure audit and reporting (automated)
 
-- [ ] Complete any required Audit Manager console setup
-- [ ] `aws-soc2-setup security audit --audit-account <id> ...`
+- [ ] `aws-soc2-setup security audit --audit-account <id> --aggregator ...`
+- [ ] **Audit Manager note:** as of 2026-04-30 Audit Manager is in maintenance mode and **cannot be enabled for new accounts**. Prefer Config aggregators (this step), Security Hub, Control Tower controls, and Config Conformance Packs (step 15) for technical evidence. There is no SOC 2 Conformance Pack today; AWS points to partner GRC tools (e.g. Vanta, Drata) for end-to-end evidence packaging. See [AWS Audit Manager availability change](https://docs.aws.amazon.com/audit-manager/latest/userguide/audit-manager-availability-change.html).
+- [ ] Optional: `-a -f` only if Audit Manager is already active in this account/region (existing customers)
 
-## Step 15 — Provision additional accounts (optional / manual)
+## Step 15 — Deploy Config Conformance Packs (automated)
+
+- [ ] `aws-soc2-setup security conformance-packs --preset recommended`
+- [ ] Or pick packs: `security conformance-packs --packs cis-level1 wa-security ct-detective` (`--list` for ids)
+- [ ] Requires AWS Config enabled in the account (step 11)
+
+## Step 16 — Provision additional accounts (optional / manual)
 
 - [ ] `aws-soc2-setup controltower provision-account ...` (use `--wait` as needed)
 - [ ] Re-run `security enable` for new accounts
 - [ ] Assign group access to new accounts
 
-## Step 16 — Custom Identity Center domain (optional / manual)
+## Step 17 — Custom Identity Center domain (optional / manual)
 
 - [ ] Configure the custom domain in the console
 - [ ] `aws-soc2-setup sso set-start-url -p <profile> -d <domain>`
 
-## Step 17 — Disable root access for sub-accounts (manual / destructive)
+## Step 18 — Disable root access for sub-accounts (manual / destructive)
 
 - [ ] Review member accounts (`aws-soc2-setup status`)
 - [ ] `aws-soc2-setup root remove-access --yes`
 
-## Step 18 — Configure KMS key management (optional / manual)
+## Step 19 — Configure KMS key management (optional / manual)
 
 - [ ] `aws-soc2-setup kms -k <keyId> ...`
 

@@ -17,16 +17,17 @@ const makeRunners = (): SetupRunners => ({
   createOus: vi.fn().mockResolvedValue(undefined),
   registerOu: vi.fn().mockResolvedValue(undefined),
   enableSecurity: vi.fn().mockResolvedValue(undefined),
+  deployConformancePacks: vi.fn().mockResolvedValue(undefined),
   enableControls: vi.fn().mockResolvedValue(undefined),
   configureBackup: vi.fn().mockResolvedValue(undefined),
   configureAudit: vi.fn().mockResolvedValue(undefined),
 });
 
 describe("SETUP_PLAN", () => {
-  it("documents all eighteen ordered steps", () => {
-    expect(SETUP_PLAN).toHaveLength(18);
+  it("documents all nineteen ordered steps", () => {
+    expect(SETUP_PLAN).toHaveLength(19);
     expect(SETUP_PLAN.map(step => step.number)).toEqual(
-      Array.from({ length: 18 }, (_, i) => i + 1)
+      Array.from({ length: 19 }, (_, i) => i + 1)
     );
     expect(SETUP_PLAN.find(step => step.number === 3)).toMatchObject({
       title: "Create AWS Organizations",
@@ -34,6 +35,10 @@ describe("SETUP_PLAN", () => {
     });
     expect(SETUP_PLAN.find(step => step.number === 10)).toMatchObject({
       title: "Register OUs with Control Tower",
+      kind: "automated",
+    });
+    expect(SETUP_PLAN.find(step => step.number === 15)).toMatchObject({
+      title: "Deploy Config Conformance Packs",
       kind: "automated",
     });
   });
@@ -64,6 +69,10 @@ describe("handleSetup", () => {
     expect(runners.enableSecurity).toHaveBeenCalledWith(expect.anything(), {
       all: true,
     });
+    expect(runners.deployConformancePacks).toHaveBeenCalledWith(
+      expect.anything(),
+      { preset: "recommended" }
+    );
     expect(runners.enableControls).not.toHaveBeenCalled();
     expect(runners.configureBackup).not.toHaveBeenCalled();
     expect(runners.configureAudit).not.toHaveBeenCalled();

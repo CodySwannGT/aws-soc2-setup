@@ -3,6 +3,7 @@ import {
   CreateAssessmentCommand,
   GetAccountStatusCommand,
   ListAssessmentFrameworksCommand,
+  RegisterAccountCommand,
   RegisterOrganizationAdminAccountCommand,
   UpdateSettingsCommand,
 } from "@aws-sdk/client-auditmanager";
@@ -20,6 +21,7 @@ import { mockClient } from "aws-sdk-client-mock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  classifyAuditManagerError,
   createSoc2Framework,
   enableAuditManager,
   ensureConfigAggregator,
@@ -35,6 +37,8 @@ const CTX = { region: "us-east-1" };
 const ACCOUNT = "123456789012";
 const BUCKET = "audit-reports-123456789012";
 const CONSOLE_ERROR = "Please complete AWS Audit Manager setup from home page";
+const MAINTENANCE_ERROR =
+  "AWS Audit Manager is now in maintenance mode. As of April 30, 2026, you cannot enable Audit Manager for new accounts or in additional AWS Regions.";
 
 const auditOptions = (over: Partial<AuditOptions> = {}): AuditOptions => ({
   accountId: ACCOUNT,
@@ -56,6 +60,12 @@ describe("security/audit", () => {
     vi.restoreAllMocks();
   });
 
+  it("classifyAuditManagerError detects maintenance mode", () => {
+    expect(classifyAuditManagerError(MAINTENANCE_ERROR)).toBe("unavailable");
+    expect(classifyAuditManagerError(CONSOLE_ERROR)).toBe("needs-console");
+    expect(classifyAuditManagerError("boom")).toBe("error");
+  });
+
   it("isManagementAccount is true when describe-organization succeeds", async () => {
     orgMock.on(DescribeOrganizationCommand).resolves({});
     await expect(isManagementAccount(CTX)).resolves.toBe(true);
@@ -70,11 +80,13 @@ describe("security/audit", () => {
     amMock.on(GetAccountStatusCommand).resolves({ status: "ACTIVE" });
     await expect(enableAuditManager(CTX, auditOptions())).resolves.toBe(true);
     expect(amMock.commandCalls(UpdateSettingsCommand)).toHaveLength(0);
+    expect(amMock.commandCalls(RegisterAccountCommand)).toHaveLength(0);
   });
 
   it("enableAuditManager registers and enables when inactive", async () => {
     amMock.on(GetAccountStatusCommand).resolves({ status: "INACTIVE" });
     amMock.on(RegisterOrganizationAdminAccountCommand).resolves({});
+    amMock.on(RegisterAccountCommand).resolves({});
     amMock.on(UpdateSettingsCommand).resolves({});
     await expect(enableAuditManager(CTX, auditOptions())).resolves.toBe(true);
   });
@@ -82,8 +94,17 @@ describe("security/audit", () => {
   it("enableAuditManager returns false when console setup is required", async () => {
     amMock.on(GetAccountStatusCommand).resolves({ status: "INACTIVE" });
     amMock.on(RegisterOrganizationAdminAccountCommand).resolves({});
+    amMock.on(RegisterAccountCommand).resolves({});
     amMock.on(UpdateSettingsCommand).rejects(new Error(CONSOLE_ERROR));
     await expect(enableAuditManager(CTX, auditOptions())).resolves.toBe(false);
+  });
+
+  it("enableAuditManager returns false when Audit Manager is unavailable for new accounts", async () => {
+    amMock.on(GetAccountStatusCommand).resolves({ status: "INACTIVE" });
+    amMock.on(RegisterOrganizationAdminAccountCommand).resolves({});
+    amMock.on(RegisterAccountCommand).rejects(new Error(MAINTENANCE_ERROR));
+    await expect(enableAuditManager(CTX, auditOptions())).resolves.toBe(false);
+    expect(amMock.commandCalls(UpdateSettingsCommand)).toHaveLength(0);
   });
 
   it("createSoc2Framework creates an assessment when the framework exists", async () => {

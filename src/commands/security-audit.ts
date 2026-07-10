@@ -30,6 +30,9 @@ const applyFramework = async (
 ): Promise<void> => {
   if (!enabled) {
     info("Audit Manager not enabled; skipping SOC 2 framework");
+    info(
+      "For new accounts after 2026-04-30, use Config Conformance Packs, Security Hub, and Control Tower controls instead of Audit Manager."
+    );
     return;
   }
   await createSoc2Framework(globals, auditOptions);
@@ -65,7 +68,8 @@ const runAudit = async (
 
 /**
  * Execute `security audit`: ensure an audit-reports bucket, optionally enable
- * Audit Manager (+ SOC 2 framework) and a multi-account Config aggregator.
+ * Audit Manager (+ SOC 2 framework) when still available, and a multi-account
+ * Config aggregator. New accounts cannot enable Audit Manager after 2026-04-30.
  * Honors `--dry-run`.
  * @param globals - Resolved global options.
  * @param options - The parsed audit options.
@@ -96,15 +100,21 @@ export const registerSecurityAudit = (
   security
     .command("audit")
     .description(
-      "Configure audit reporting (Audit Manager, SOC 2 framework, Config aggregator)"
+      "Configure audit reporting (Config aggregator; Audit Manager if already available)"
     )
     .option("-b, --bucket <name>", "S3 bucket for audit reports")
     .option(
       "--audit-account <id>",
       "Audit account ID for delegated administration"
     )
-    .option("-a, --audit-manager", "Enable AWS Audit Manager")
-    .option("-f, --framework", "Create the SOC 2 framework assessment")
+    .option(
+      "-a, --audit-manager",
+      "Enable AWS Audit Manager (skipped for new accounts after 2026-04-30)"
+    )
+    .option(
+      "-f, --framework",
+      "Create the SOC 2 framework assessment (requires Audit Manager)"
+    )
     .option("--aggregator", "Set up a multi-account Config aggregator")
     .option("--skip-audit-manager", "Continue if Audit Manager setup fails")
     .action(async (options: SecurityAuditOptions) => {

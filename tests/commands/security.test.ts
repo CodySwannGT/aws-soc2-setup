@@ -167,13 +167,15 @@ describe("handleSecurityAudit", () => {
 });
 
 describe("registerSecurity", () => {
-  it("registers the security command group with enable and audit", () => {
+  it("registers the security command group with enable, audit, and conformance-packs", () => {
     const security = buildProgram().commands.find(
       command => command.name() === "security"
     );
     const subcommands = (security?.commands ?? []).map(command =>
       command.name()
     );
-    expect(subcommands).toEqual(expect.arrayContaining(["enable", "audit"]));
+    expect(subcommands).toEqual(
+      expect.arrayContaining(["enable", "audit", "conformance-packs"])
+    );
   });
 });
