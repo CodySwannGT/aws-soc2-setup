@@ -73,7 +73,7 @@ const readyStatus = (): EnvironmentStatus => ({
       detail: "2 active member account(s)",
     },
   ],
-  planSummary: { automated: 8, manual: 11, total: 19 },
+  planSummary: { automated: 8, manual: 13, total: 21 },
 });
 
 describe("handleStatus", () => {
@@ -88,7 +88,7 @@ describe("handleStatus", () => {
     const printed = out.mock.calls.map(call => String(call[0])).join("");
     expect(printed).toContain("environment status");
     expect(printed).toContain("us-east-1");
-    expect(printed).toContain("19 steps");
+    expect(printed).toContain("21 steps");
     expect(printed).toContain(LABEL_CREDENTIALS);
     expect(printed).toContain("setup --dry-run");
   });

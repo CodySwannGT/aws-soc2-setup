@@ -6,6 +6,7 @@ import { registerBackup } from "./commands/backup.js";
 import { registerControlTower } from "./commands/controltower.js";
 import { registerKms } from "./commands/kms.js";
 import { registerRoot } from "./commands/root.js";
+import { registerScp } from "./commands/scp.js";
 import { registerSecurity } from "./commands/security.js";
 import { registerSetup } from "./commands/setup.js";
 import { registerSso } from "./commands/sso.js";
@@ -56,6 +57,7 @@ export const buildProgram = (): Command => {
   registerSecurity(program);
   registerControlTower(program);
   registerRoot(program);
+  registerScp(program);
   registerSetup(program);
 
   return program;
