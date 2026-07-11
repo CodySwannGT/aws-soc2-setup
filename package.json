@@ -50,8 +50,8 @@
     "node": ">=18"
   },
   "name": "@codyswann/aws-soc2-setup",
-  "version": "1.0.0",
-  "description": "Automated AWS Control Tower setup for SOC 2 compliance \u2014 account provisioning, IAM Identity Center, security services, backup, and KMS as a typed CLI",
+  "version": "1.1.0",
+  "description": "Automated AWS Control Tower setup for SOC 2 compliance — account provisioning, IAM Identity Center, security services, backup, and KMS as a typed CLI",
   "type": "module",
   "main": "./dist/cli.js",
   "bin": {
