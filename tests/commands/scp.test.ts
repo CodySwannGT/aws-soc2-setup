@@ -136,7 +136,7 @@ describe("handleAlertManagement", () => {
     expect(eventsMock.commandCalls(PutTargetsCommand)).toHaveLength(1);
   });
 
-  it("warns but proceeds outside us-east-1", async () => {
+  it("overrides the region to us-east-1 with a warning", async () => {
     snsMock.on(CreateTopicCommand).resolves({ TopicArn: TOPIC_ARN });
     snsMock.on(SetTopicAttributesCommand).resolves({});
     snsMock.on(ListSubscriptionsByTopicCommand).resolves({ Subscriptions: [] });
@@ -147,6 +147,11 @@ describe("handleAlertManagement", () => {
       email: EMAIL,
     });
     expect(eventsMock.commandCalls(PutRuleCommand)).toHaveLength(1);
+    const written = vi
+      .mocked(process.stdout.write)
+      .mock.calls.map(call => String(call[0]))
+      .join("");
+    expect(written).toContain("instead of eu-west-1");
   });
 });
 

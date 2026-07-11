@@ -136,7 +136,7 @@ const applyDenyIamUsers = async (
  * that alert on IAM credential creation — detective coverage for the
  * management account, which SCPs cannot bind. Requires `--yes`; `--dry-run`
  * previews. IAM events are global-service events delivered in us-east-1, so
- * the rule only fires when created there.
+ * the alert resources are always created there regardless of `--region`.
  * @param globals - Resolved global options.
  * @param options - Alert email and optional rule/topic names.
  */
@@ -149,19 +149,23 @@ export const handleAlertManagement = async (
   if (globals.dryRun) {
     info(
       `[dry-run] Would create EventBridge rule ${ruleName} -> SNS topic ` +
-        `${topicName} -> ${options.email} (region ${globals.region})`
+        `${topicName} -> ${options.email} (region ${IAM_EVENTS_REGION})`
     );
     return;
   }
   requireYes(globals, "create management-account IAM alerts");
-  if (globals.region !== IAM_EVENTS_REGION) {
-    warn(
-      `IAM CloudTrail events are delivered in ${IAM_EVENTS_REGION}; the rule ` +
-        `is being created in ${globals.region} and will not fire there. ` +
-        `Re-run with -r ${IAM_EVENTS_REGION}.`
-    );
-  }
   await applyAlertManagement(globals, options, ruleName, topicName);
+};
+
+const resolveAlertRegion = (globals: GlobalOptions): GlobalOptions => {
+  if (globals.region === IAM_EVENTS_REGION) {
+    return globals;
+  }
+  warn(
+    `IAM CloudTrail events are delivered in ${IAM_EVENTS_REGION}; creating ` +
+      `the alert resources there instead of ${globals.region}.`
+  );
+  return { ...globals, region: IAM_EVENTS_REGION };
 };
 
 const reportSubscription = (subscribed: boolean, email: string): void => {
@@ -178,11 +182,12 @@ const applyAlertManagement = async (
   ruleName: string,
   topicName: string
 ): Promise<void> => {
-  const topicArn = await ensureAlertTopic(globals, topicName);
-  const subscribed = await subscribeEmail(globals, topicArn, options.email);
+  const context = resolveAlertRegion(globals);
+  const topicArn = await ensureAlertTopic(context, topicName);
+  const subscribed = await subscribeEmail(context, topicArn, options.email);
   success(`SNS topic ready: ${topicArn}`);
   reportSubscription(subscribed, options.email);
-  await ensureAlertRule(globals, ruleName, topicArn);
+  await ensureAlertRule(context, ruleName, topicArn);
   success(`EventBridge rule ${ruleName} enabled`);
 };
 
