@@ -80,7 +80,7 @@ describe("gatherEnvironmentStatus", () => {
     expect(status.identityStoreId).toBe(IDENTITY_STORE_ID);
     expect(status.ous.every(ou => ou.present)).toBe(true);
     expect(status.checks.every(check => check.state === "ok")).toBe(true);
-    expect(status.planSummary.total).toBe(19);
+    expect(status.planSummary.total).toBe(21);
     expect(status.planSummary.automated).toBeGreaterThan(0);
   });
 

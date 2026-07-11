@@ -129,4 +129,18 @@ export const SETUP_PLAN: SetupStep[] = [
     kind: "manual",
     detail: "Run `kms -k <keyId>` for backup keys.",
   },
+  {
+    number: 20,
+    title: "Block long-lived IAM credentials",
+    kind: "manual",
+    detail:
+      "Run `scp deny-iam-users --yes` once no workload depends on IAM users.",
+  },
+  {
+    number: 21,
+    title: "Alert on IAM credential creation in the management account",
+    kind: "manual",
+    detail:
+      "Run `scp alert-management -e <email> --yes` in us-east-1 (SCPs cannot bind the management account).",
+  },
 ];

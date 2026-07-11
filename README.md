@@ -39,6 +39,7 @@ This package is a typed Node.js CLI (`aws-soc2-setup`) published as [`@codyswann
 | **backup** | AWS Backup vault/plan + delegated admin |
 | **kms** | Key administrators and rotation |
 | **root** | Delete root access keys; org-wide root credential removal |
+| **scp** | Deny long-lived IAM credentials org-wide; management-account creation alerts |
 
 Manual console steps (root MFA, enabling Identity Center, landing zone creation) stay explicit in the plan — the CLI does not pretend those are fully automatable.
 
@@ -110,7 +111,7 @@ aws-soc2-setup setup -p your-admin-profile \
 | --- | --- |
 | `status` | Read-only readiness: credentials, Organizations, recommended OUs, Identity Center, member accounts |
 | `whoami` | Print STS caller identity |
-| `setup` | Print the 19-step plan and run automatable steps |
+| `setup` | Print the 21-step plan and run automatable steps |
 | `sso create-user` / `group` / `assign` | Identity Center users, groups, permission sets |
 | `sso configure-profile` / `set-start-url` | Local SSO profile and start URL |
 | `controltower create-organization` | Create AWS Organizations (`FeatureSet=ALL`) if missing |
@@ -124,6 +125,8 @@ aws-soc2-setup setup -p your-admin-profile \
 | `backup` | Configure AWS Backup (vault, plan, delegated admin) |
 | `kms` | Manage key administrators and rotation |
 | `root delete-keys` / `remove-access` | Root key deletion and org-wide root lockdown (`--yes` required) |
+| `scp deny-iam-users` | SCP denying IAM user / access key / login profile creation, attached to the org root or given OUs (`--yes` required; `--exempt-arn` for break-glass) |
+| `scp alert-management` | EventBridge → SNS email alert on IAM credential creation — detective coverage for the management account, which SCPs cannot bind (`--yes` required; run in us-east-1) |
 
 Run `aws-soc2-setup <command> --help` for flags on each subcommand.
 
@@ -152,12 +155,15 @@ Run `aws-soc2-setup <command> --help` for flags on each subcommand.
 | 17 | Custom Identity Center domain | Manual (`sso set-start-url`) |
 | 18 | Disable root access for sub-accounts | Manual (`root remove-access --yes`) |
 | 19 | Configure KMS key management | Manual (`kms`) |
+| 20 | Block long-lived IAM credentials | Manual (`scp deny-iam-users --yes`) |
+| 21 | Alert on management-account IAM credential creation | Manual (`scp alert-management -e <email> --yes`) |
 
 Track progress with [`docs/CHECKLIST.md`](docs/CHECKLIST.md).
 
 ## Security considerations
 
 - **Root access keys** may be created temporarily during bootstrap; delete them promptly (`root delete-keys`). If a run is interrupted, remove any leftover root keys manually.
+- **The management account is exempt from SCPs by AWS design** — `scp deny-iam-users` protects every member account, but cannot prevent IAM user creation in the management account itself. Pair it with `scp alert-management` (detection) and keep workloads out of the management account.
 - **`root remove-access`** is destructive and requires `--yes`. Review member accounts before running it.
 - **New Account Factory accounts** do not automatically inherit every security service. Re-run `security enable` (or `setup`) after provisioning.
 - **Least privilege** — prefer Identity Center permission sets over long-lived IAM users; review cross-account roles regularly.

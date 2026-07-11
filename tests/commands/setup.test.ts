@@ -24,10 +24,10 @@ const makeRunners = (): SetupRunners => ({
 });
 
 describe("SETUP_PLAN", () => {
-  it("documents all nineteen ordered steps", () => {
-    expect(SETUP_PLAN).toHaveLength(19);
+  it("documents all twenty-one ordered steps", () => {
+    expect(SETUP_PLAN).toHaveLength(21);
     expect(SETUP_PLAN.map(step => step.number)).toEqual(
-      Array.from({ length: 19 }, (_, i) => i + 1)
+      Array.from({ length: 21 }, (_, i) => i + 1)
     );
     expect(SETUP_PLAN.find(step => step.number === 3)).toMatchObject({
       title: "Create AWS Organizations",
