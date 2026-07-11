@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.1.3](https://github.com/CodySwannGT/aws-soc2-setup/compare/v1.1.2...v1.1.3) (2026-07-11)
+
+
+### Bug Fixes
+
+* remove dangling $vite override reference ([d4d9a86](https://github.com/CodySwannGT/aws-soc2-setup/commit/d4d9a860a55747bb4470ab170d535e2b582784ab))
+
 ### [1.1.2](https://github.com/CodySwannGT/aws-soc2-setup/compare/v1.1.1...v1.1.2) (2026-07-11)
 
 ### [1.1.1](https://github.com/CodySwannGT/aws-soc2-setup/compare/v1.1.0...v1.1.1) (2026-07-11)
