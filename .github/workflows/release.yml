@@ -1,5 +1,6 @@
-# This file is managed by Lisa.
-# Do not edit directly — changes will be overwritten on the next `lisa` run.
+# Ported from lisa's Lisa-managed release.yml for this host project.
+# One host-side adaptation: the quality job calls lisa's remote quality.yml
+# (this repo has no local copy), matching ci.yml.
 
 name: Enhanced Release Workflow v4 (with Enterprise Features)
 
@@ -359,7 +360,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/quality.yml
+    uses: CodySwannGT/lisa/.github/workflows/quality.yml@main
     with:
       skip_jobs: ${{ inputs.skip_jobs }}
       node_version: ${{ inputs.node_version }}
