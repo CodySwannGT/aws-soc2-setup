@@ -1,0 +1,81 @@
+# Release-and-publish pipeline (adapted from lisa's deploy.yml example):
+# 1. Call the release.yml workflow to create a release (standard-version
+#    bump + changelog + tag, pushed via the DEPLOY_KEY ruleset bypass)
+# 2. Publish the tagged version to npm via OIDC trusted publishing
+#
+# This repo is a published CLI with a single `main` environment — there is
+# no deployment target beyond the npm registry.
+
+name: Release and Publish
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to release'
+        required: true
+        default: 'main'
+        type: choice
+        options:
+          - main
+
+# Prevent concurrent runs of the same workflow on the same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# Required permissions for creating releases and OIDC publishing
+permissions:
+  contents: write
+  packages: write
+  issues: write
+  pull-requests: write
+  id-token: write # Required for npm OIDC trusted publishing
+
+jobs:
+  # Environment setup
+  determine_environment:
+    name: Determine Environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      environment: ${{ steps.env.outputs.environment }}
+    steps:
+      - name: Set environment
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          else
+            echo "environment=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+  release:
+    name: Release
+    uses: ./.github/workflows/release.yml
+    needs: [determine_environment]
+    with:
+      environment: ${{ needs.determine_environment.outputs.environment }}
+      release_strategy: 'standard-version'
+      require_approval: false
+      require_signatures: false
+      generate_sbom: true
+      override_blackout: true
+      node_version: '22.21.1'
+      package_manager: 'bun'
+    secrets: inherit
+
+  # Publish to npm (only on main, and only if a version was created)
+  publish_npm:
+    name: Publish to npm
+    needs: [determine_environment, release]
+    if: ${{ needs.determine_environment.outputs.environment == 'main' && !contains(github.event.head_commit.message, '[skip ci]') && needs.release.outputs.tag != '' }}
+    uses: ./.github/workflows/publish-to-npm.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      version: ${{ needs.release.outputs.version }}
+      node_version: '22.21.1'
+      package_manager: 'bun'
