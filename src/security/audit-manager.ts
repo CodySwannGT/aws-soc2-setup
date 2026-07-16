@@ -39,10 +39,7 @@ export interface AuditManagerOptions {
 
 /** Outcome of attempting to enable Audit Manager in this account/region. */
 export type AuditManagerOutcome =
-  | "enabled"
-  | "needs-console"
-  | "unavailable"
-  | "error";
+  "enabled" | "needs-console" | "unavailable" | "error";
 
 const auditClient = (context: SecurityContext): AuditManagerClient =>
   new AuditManagerClient(buildClientConfig(context));
