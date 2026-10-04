@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,13 +24,19 @@ describe("handleConfigureProfile", () => {
 });
 
 describe("handleSetStartUrl", () => {
-  afterEach(() => {
+  const dirs: string[] = [];
+
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await Promise.all(
+      dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))
+    );
   });
 
   it("rewrites the start URL in the given config file", async () => {
     vi.spyOn(process.stdout, "write").mockReturnValue(true);
     const dir = await mkdtemp(join(tmpdir(), "soc2-cfg-"));
+    dirs.push(dir);
     const configPath = join(dir, "config");
     await writeFile(
       configPath,
