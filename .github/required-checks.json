@@ -21,15 +21,28 @@
   ],
   "enforcement": "warn",
   "ruleset": {
-    "repo": "",
-    "ids": [],
-    "baseline_fetched_at": ""
+    "repo": "CodySwannGT/aws-soc2-setup",
+    "ids": [
+      18713952,
+      18805289
+    ],
+    "baseline_fetched_at": "2026-10-04"
   },
   "workflows": [
     ".github/workflows/ci.yml"
   ],
   "exemption_ticket_pattern": "^[A-Z][A-Z0-9]+-\\d+$",
-  "required_contexts": [],
+  "required_contexts": [
+    "CodeRabbit",
+    "GitGuardian Security Checks",
+    "🔍 Quality Checks / 🧹 Lint",
+    "🔍 Quality Checks / 🔍 Type Check",
+    "🔍 Quality Checks / 🏗️ Build",
+    "🔍 Quality Checks / 📐 Check Formatting",
+    "🔍 Quality Checks / 🔒 Security Scan",
+    "🔍 Quality Checks / 🧪 Run Unit Tests",
+    "🔍 Quality Checks / 🧪 Run Integration Tests"
+  ],
   "_example_required_contexts": [
     "🔍 Quality Checks / 🧹 Lint",
     "🔍 Quality Checks / 🔍 Type Check",
