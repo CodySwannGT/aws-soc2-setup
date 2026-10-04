@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import type { Command } from "commander";
 
+import { CliError } from "../lib/errors.js";
 import { runInteractive } from "../lib/exec.js";
 import { info, success } from "../lib/logger.js";
 import { runAction } from "../lib/run.js";
@@ -58,17 +59,27 @@ export const registerSsoConfigCommands = (sso: Command): void => {
       });
     });
 
+  // The profile comes from the root program's global `-p, --profile`. A
+  // subcommand option of the same name never receives a value: commander
+  // assigns the flag to the global option first.
   sso
     .command("set-start-url")
-    .description("Update the SSO start URL in your AWS CLI config")
-    .requiredOption("-p, --profile <profile>", "AWS CLI profile to update")
+    .description(
+      "Update the SSO start URL for the --profile profile in your AWS CLI config"
+    )
     .requiredOption(
       "-d, --domain <domain>",
       "Identity Center domain (without https:// or /start)"
     )
-    .action(async (options: SetStartUrlOptions) => {
+    .action(async (options: { domain: string }, command: Command) => {
       await runAction(async () => {
-        await handleSetStartUrl(options);
+        const { profile } = command.optsWithGlobals<{ profile?: string }>();
+        if (!profile) {
+          throw new CliError(
+            "set-start-url needs the profile to update: pass -p, --profile <profile>"
+          );
+        }
+        await handleSetStartUrl({ profile, domain: options.domain });
       });
     });
 };
