@@ -1,7 +1,7 @@
 ---
 name: lisa-prd-ticket-coverage
-description: "Verifies that every requirement in a PRD (Notion, Confluence, Linear, or GitHub Issues) is covered by at least one created destination ticket (JIRA, GitHub Issues, or Linear) — no silent drops. Parses the PRD into atomic items (goals, user stories, functional/non-functional requirements, acceptance criteria, important notes), maps each to the created tickets, and produces a coverage matrix and verdict (COMPLETE / COMPLETE_WITH_SCOPE_CREEP / GAPS_FOUND / NO_TICKETS_FOUND). Used by notion-prd-intake / confluence-prd-intake / linear-prd-intake / github-prd-intake post-write to gate the Ticketed transition; can also be invoked standalone for after-the-fact audits."
-allowed-tools: ["Skill", "Bash", "mcp__claude_ai_Notion__notion-fetch", "mcp__claude_ai_Notion__notion-get-comments", "mcp__atlassian__getConfluencePage", "mcp__atlassian__getConfluencePageDescendants", "mcp__atlassian__getConfluencePageFooterComments", "mcp__atlassian__getConfluencePageInlineComments", "mcp__atlassian__getConfluenceCommentChildren", "mcp__atlassian__getJiraIssue", "mcp__atlassian__searchJiraIssuesUsingJql", "mcp__atlassian__getAccessibleAtlassianResources"]
+description: "Verifies that every requirement…"
+allowed-tools: ["Skill", "Bash"]
 ---
 
 # PRD Ticket Coverage Audit: $ARGUMENTS
@@ -14,8 +14,8 @@ allowed-tools: ["Skill", "Bash", "mcp__claude_ai_Notion__notion-fetch", "mcp__cl
 The PRD URL can be a **Notion page URL**, a **Confluence page URL**, a **Linear project URL**, or a **GitHub issue URL**. Detect the vendor from the host:
 
 - `notion.so` / `notion.site` → Notion. Fetch with `mcp__claude_ai_Notion__notion-fetch` (`include_discussions: true`) and `mcp__claude_ai_Notion__notion-get-comments`.
-- Atlassian Confluence host (e.g. `*.atlassian.net/wiki/...`) → Confluence. Fetch with `mcp__atlassian__getConfluencePage`, `mcp__atlassian__getConfluencePageDescendants` (for child epic pages), `mcp__atlassian__getConfluencePageFooterComments`, `mcp__atlassian__getConfluencePageInlineComments`, and `mcp__atlassian__getConfluenceCommentChildren` for nested replies.
-- `linear.app` host → Linear. Fetch with `lisa-linear-access operation: get-project` (capture description, labels, state, attached resources), `lisa-linear-access operation: list-documents({projectId})` + `lisa-linear-access operation: get-document` per attached document, `lisa-linear-access operation: list-issues({project})` for sub-issues that act as child epics / user stories, and `lisa-linear-access operation: list-comments({issueId})` per sub-issue for decisions and engineering notes. Comments do not exist on the project itself in the MCP surface — sub-issue comments are the substitute.
+- Atlassian Confluence host (e.g. `*.atlassian.net/wiki/...`) → Confluence. Through `lisa-atlassian-access`, fetch the page, its descendants (for child epic pages), and its footer + inline comments including nested replies. State the operation, not a vendor tool name — the access skill owns substrate selection (`integration-access-layer`).
+- `linear.app` host → Linear. Fetch with `lisa-linear-access operation: get-project` (capture description, labels, state, attached resources), `lisa-linear-access operation: list-documents({projectId})` + `lisa-linear-access operation: get-document` per attached document, `lisa-linear-access operation: list-issues({project})` for sub-issues that act as child epics / user stories, and `lisa-linear-access operation: list-comments({issueId})` per sub-issue for decisions and engineering notes. Also fetch all project comments with `lisa-linear-access operation: list-comments project_id:<ID>`; the access layer pages through GraphQL even when the MCP lacks project comments. An incomplete comment read is an access failure, not an empty history.
 - `github.com` host → GitHub Issues. Fetch with the `gh` CLI (no GitHub MCP — Lisa uses the CLI exclusively for GitHub):
   - `gh issue view <number> --repo <org>/<repo> --json number,title,body,labels,milestone,assignees,author,createdAt,comments,url` for the PRD body and comments.
   - `gh api graphql` with the `subIssues` field for native sub-issue children (these stand in for child epic pages — see `lisa-github-read-issue` Phase 3 for the exact query).
@@ -41,7 +41,7 @@ Per-ticket gates (`lisa-jira-validate-ticket`) prove each created ticket is well
 2. Fetch the PRD using the vendor-appropriate tool surface:
    - **Notion**: `notion-fetch` with `include_discussions: true`. Capture: title, body, child Epic pages, all comment threads.
    - **Confluence**: `getConfluencePage` (capture title, body, labels), `getConfluencePageFooterComments` + `getConfluencePageInlineComments` (capture all comments; walk replies via `getConfluenceCommentChildren` for any thread with children).
-   - **Linear**: `get_project` (capture name, description, labels, state, attached resources). Capture sub-issues via `list_issues({project})` and per-issue comments via `list_comments({issueId})`.
+   - **Linear**: `get_project` (capture name, description, labels, state, attached resources). Capture all project comments via `lisa-linear-access operation: list-comments project_id:<ID>`, plus sub-issues via `list_issues({project})` and per-issue comments via `list_comments({issueId})`. Include both comment sources in destination URL discovery; refuse to report `NO_TICKETS_FOUND` from an incomplete read.
    - **GitHub**: `gh issue view --json` for the source PRD issue (title, body, labels, comments). Capture sub-issues via the GraphQL `subIssues` traversal.
 3. If the PRD has child Epic sub-pages / sub-issues (a multi-epic PRD), fetch each in parallel:
    - **Notion**: `notion-fetch` per child page with `include_discussions: true`.
@@ -50,7 +50,7 @@ Per-ticket gates (`lisa-jira-validate-ticket`) prove each created ticket is well
    - **GitHub**: enumerate native sub-issues via `gh api graphql` (`subIssues` field), then `gh issue view <child-num> --json body,comments` per child. Recurse to depth 3.
    The audit walks the full PRD tree.
 4. If `tickets=[...]` not provided, locate the destination Epic by:
-   - Looking for a destination URL in the PRD body, comments, or the PRD's most recent "Ticketed by Claude" comment posted by `lisa-notion-prd-intake` / `lisa-confluence-prd-intake` / `lisa-linear-prd-intake` / `lisa-github-prd-intake` (for Linear, this comment lives on the project's sentinel feedback issue; for the others, it lives on the PRD page / issue itself).
+   - Looking for a destination URL in the PRD body, comments, or the PRD's most recent "Ticketed by Claude" comment posted by `lisa-notion-prd-intake` / `lisa-confluence-prd-intake` / `lisa-linear-prd-intake` / `lisa-github-prd-intake` (for every vendor, this comment lives on the PRD page / project / issue itself).
    - Searching the destination tracker via `lisa-tracker-read` (or directly via `searchJiraIssuesUsingJql` / `gh issue list --search`) for an epic whose summary or description references the PRD title or project ID.
    - If no epic found, return verdict `NO_TICKETS_FOUND` with a clear remediation — coverage cannot be assessed without the ticket set.
 5. Once the epic is known, fetch all child stories and sub-tasks:
@@ -96,6 +96,21 @@ PRD item id  →  [ticket keys that cover it]
 
 Matching rules (in priority order):
 
+0. **Declared trace (deterministic — preferred)**: tickets created after
+   requirement traceability landed carry a `Source Requirement` section
+   (verbatim requirement quotes + register `R-ids`), and the PRD's
+   `## Tickets` section carries the same ids in its `lisa:gw … reqs=`
+   tokens. When present, the declared trace IS the mapping — match the
+   quoted text against the extracted atomic items (match on the verbatim
+   quote, not the `R-id`: ids are per-generation and may have shifted if
+   the PRD was re-planned; quotes are the durable anchor). A declared
+   trace is definitive: do not second-guess it with keyword inference,
+   but DO flag a declared quote that no longer appears anywhere in the
+   PRD (the requirement was edited or removed — surface it as a drift
+   finding, not silently). The derived-work form ("Derived work
+   supporting R3, R7") counts as a trace to the named requirements.
+   Fall back to rules 1–4 only for tickets with no Source Requirement
+   section (created before traceability existed).
 1. **Direct quote / strong keyword overlap**: the ticket's summary or AC explicitly names the PRD item's keywords. High confidence.
 2. **Domain match**: PRD item describes a UI affordance ("Tasks widget") and a ticket scopes that affordance (`[CU-2.1] Tasks widget — empty state`). Medium-high confidence.
 3. **Scope inheritance**: PRD item is a sub-detail of a parent (e.g. an AC under a user story); the ticket covers the parent user story. Medium confidence — flag for review if no more specific ticket exists.
@@ -106,6 +121,8 @@ Items with **zero** matching tickets are coverage gaps.
 ### Phase 4 — Detect scope creep (informational)
 
 For each created ticket, identify any tickets whose scope_signals do NOT trace back to a PRD item, AND are not justifiable as standard infrastructure tasks (e.g. `X.0 Setup` stories for data model / migrations are typically infrastructure scaffolding, not scope creep).
+
+With declared traces this becomes precise: a ticket whose `Source Requirement` section is absent (on a post-traceability ticket set), or whose declared quotes match nothing in the PRD, is an orphan — the strongest scope-creep signal available. A ticket using the derived-work form is by definition not scope creep; it declares which requirements it supports.
 
 Scope creep is informational, not blocking — but worth surfacing because it usually indicates the agent invented work.
 
@@ -157,7 +174,7 @@ Atomic PRD items extracted: <n>
 ### Scope-creep count: <n>
 ```
 
-`prd_anchor` and `prd_section` are built the same way as in `lisa-notion-to-tracker` / `lisa-confluence-to-tracker` / `lisa-linear-to-tracker` / `lisa-github-to-tracker`. For Notion, `prd_anchor` is the `selection_with_ellipsis` start/end snippet; for Confluence, it's the inline-comment selection text accepted by `createConfluenceInlineComment`; for Linear, it's a sub-issue identifier (e.g. `LIN-123`) when the gap maps to a specific issue, otherwise `null` (the caller posts unanchored Linear gaps on the project's sentinel feedback issue); for GitHub, it's the section heading from the PRD issue body when the gap traces to a specific section, otherwise `null` (the caller approximates inline anchoring by quoting a body excerpt at the top of the comment). The downstream caller knows which vendor it's writing to and uses the right API; this skill just emits the anchor that vendor expects.
+`prd_anchor` and `prd_section` are built the same way as in `lisa-notion-to-tracker` / `lisa-confluence-to-tracker` / `lisa-linear-to-tracker` / `lisa-github-to-tracker`. For Notion, `prd_anchor` is the `selection_with_ellipsis` start/end snippet; for Confluence, it's the inline-comment selection text accepted by `createConfluenceInlineComment`; for Linear, it's a sub-issue identifier (e.g. `LIN-123`) when the gap maps to a specific issue, otherwise `null` (the caller posts unanchored Linear gaps as a project-level comment); for GitHub, it's the section heading from the PRD issue body when the gap traces to a specific section, otherwise `null` (the caller approximates inline anchoring by quoting a body excerpt at the top of the comment). The downstream caller knows which vendor it's writing to and uses the right API; this skill just emits the anchor that vendor expects.
 
 `category` is drawn from the same fixed taxonomy used by `lisa-jira-validate-ticket` so downstream callers can apply one consistent comment-formatting policy. Most coverage gaps map to `scope` (item not represented in any ticket) or `product-clarity` (item too vague to map). Use `acceptance-criteria` for missing pass/fail conditions and `design-ux` for missing visuals.
 

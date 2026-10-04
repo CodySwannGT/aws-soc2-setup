@@ -1,11 +1,11 @@
 ---
 name: lisa-ingest
-description: "Ingest source material into the LLM Wiki. With an argument (URL, file path, or prompt) ingest that one source; with no argument run a full ingest across every enabled non-external-write source. Routes to the right connector and runs the ordered pipeline (source note → synthesis → index → log → verify → state → commit/PR)."
+description: "Ingest source material into the…"
 ---
 ## Lisa Command Compatibility
 
 - Original Claude command: `/lisa:ingest`
-- OpenCode invocation: `$lisa-ingest` or a plain-English request that matches this skill.
+- Codex invocation: `$lisa-ingest` or a plain-English request that matches this skill.
 - Treat the user's surrounding request as the command arguments.
 - Claude argument hint: `[url | file path | prompt]   (omit for a full ingest)`
 

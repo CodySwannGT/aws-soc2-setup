@@ -1,7 +1,7 @@
 ---
 name: lisa-spec-conformance
-description: "Verifies that shipped work matches its spec section-by-section — acceptance criteria, Out of Scope, Technical Approach, Validation Journey assertions, and any explicit deliverables. Builds a coverage matrix mapping each requirement to evidence, flags scope creep separately from misses, and produces a verdict (CONFORMS / PARTIAL / DIVERGES). Runs during the verification phase alongside empirical system verification."
-allowed-tools: ["Read", "Glob", "Grep", "Bash", "Skill", "mcp__atlassian__getJiraIssue", "mcp__atlassian__searchJiraIssuesUsingJql", "mcp__atlassian__getAccessibleAtlassianResources"]
+description: "Verifies that shipped work…"
+allowed-tools: ["Read", "Glob", "Grep", "Bash", "Skill"]
 ---
 
 # Spec Conformance: $ARGUMENTS
@@ -42,6 +42,7 @@ Sections to extract:
 | Deliverables | Each explicit deliverable (migration, doc, endpoint, script) | `deliverable` |
 | Plan file tasks | Each task marked complete in the plan | `task` |
 | Linked blocker resolutions | Each `is blocked by` that required work in this ticket | `blocker` |
+| Behavior contract (frontend only) | Each Gherkin scenario the item was to add or change, and each required scenario-platform obligation it introduced | `behavior` |
 
 If an acceptance criterion is not in Gherkin, still extract it as a requirement — but flag it as `LOW_SPECIFICITY` so the verdict downgrades.
 Downgrade rule: if any `LOW_SPECIFICITY` requirement exists, the maximum possible verdict is `PARTIAL` unless the spec is tightened and re-evaluated.
@@ -67,10 +68,27 @@ Gather evidence of what was actually shipped:
    git diff "${BASE_BRANCH}"...HEAD -- '**/*.test.*' '**/*.spec.*'
    ```
 4. **Empirical evidence** — output of `verification-specialist` if available (proof artifacts, API captures, UI screenshots, DB queries). If that report isn't in context, ask the caller for it before proceeding — do not substitute reading code for running the system.
+4a. **The machine-readable verdict** — `Read` `${CLAUDE_PROJECT_DIR:-.}/.lisa/verification-status.json`. Under **schema v2** it is the structured form of the evidence above, and it is what lets you check a claim's *reach* instead of taking "verified" at its word. Load `artifact` (`repository`, `head_sha`, `environment`), `claims[]` (`claim_id`, `statement`, `boundary`, `required_evidence_kinds`, `status`, `evidence_refs`, `not_established`), `evidence[]` (`evidence_id`, `kind`, `locator`, `sha256`, `captured_at`, `artifact_head_sha`), and the `not_established_reviewed` flag.
 5. **PR description** — `gh pr view --json title,body,files` if a PR exists.
 6. **Deployed state** — if the verification phase already hit a deployed environment, use those captures.
 
 Do NOT run the system yourself — that's the verification-specialist's job. Your job is to map their evidence to the spec.
+
+## Phase 3b — Cross-Check Claims Against Their Boundaries
+
+The `claim-evidence-mapping` rule is the contract: **every claim declares a boundary, and a claim is established only by evidence of a kind that reaches that boundary.** Conformance is not just "was it built" — it is also "does the proof offered actually reach the thing the requirement asserts." A unit `test-run-log` cited for a requirement about browser-visible behavior is a conformance defect even when the code is perfect.
+
+For every v2 claim loaded in Phase 3 step 4a, run three checks:
+
+| Check | Rule | Failure |
+|-------|------|---------|
+| **Boundary reach** | Each `evidence_refs` entry resolves to an `evidence[]` row whose `kind` appears in that claim's `required_evidence_kinds` — and those kinds are the ones the `claim-evidence-mapping` taxonomy binds to the claim's `boundary` | `BOUNDARY_MISMATCH` |
+| **Artifact identity** | Every cited evidence row's `artifact_head_sha` equals `artifact.head_sha` — the claim applies only to the artifact the evidence was collected against | `BOUNDARY_MISMATCH`, noting both SHAs |
+| **Not established** | `not_established_reviewed` is present and `true`, and every claim carries a `not_established` list (possibly empty) | `BOUNDARY_MISMATCH` on the verdict as a whole |
+
+Then bind the verdict back to the spec: map each `claim_id` to the requirement row it discharges. A requirement whose only supporting claim fails a check is **not** `MATCH`, no matter what the verification report's prose said. A requirement with no claim at all is `MISSING`, not `PARTIAL`.
+
+**Degrade, never block.** If `.lisa/verification-status.json` is absent, or carries **v1** (no `schema_version`, or `schema_version: 1` — only `plan` / `status` / `criteria[]` / `updated_at`), the boundary cross-check is not available. Say so explicitly in the report ("v2 verdict not present — boundary reach unverified"), fall back to the prose evidence from Phase 3, and cap the verdict at `PARTIAL` for any requirement whose boundary you cannot confirm. Do not invent a mismatch you could not check, and do not silently upgrade an unchecked claim to `MATCH`.
 
 ## Phase 4 — Build Coverage Matrix
 
@@ -79,10 +97,12 @@ For every requirement extracted in Phase 2, produce one row:
 | Column | Value |
 |--------|-------|
 | Requirement ID | Stable identifier (e.g. `AC-1`, `OOS-2`, `ASSERT-3`) |
-| Classification | `acceptance` / `excluded` / `technical` / `assertion` / `deliverable` / `task` / `blocker` |
+| Classification | `acceptance` / `excluded` / `technical` / `assertion` / `deliverable` / `task` / `blocker` / `behavior` |
 | Requirement Text | Verbatim from spec |
-| Evidence | Specific pointer — file:line, test name, verification report section, PR file, screenshot name |
-| Status | `MATCH` / `PARTIAL` / `MISSING` / `SCOPE_CREEP_VIOLATION` |
+| Evidence | Specific pointer — file:line, test name, verification report section, PR file, screenshot name. When a v2 verdict exists, also name the `claim_id` and `evidence_id` that discharge it |
+| Boundary | The claim's `boundary` from the v2 verdict (`code-unit` / `browser` / `http-api` / `cli` / `data` / `deploy-health` / `performance` / `standards-compat`), or `—` when no v2 claim maps to this row |
+| Evidence kind | The `kind` of each cited evidence row, so a reader sees the reach without opening the verdict |
+| Status | `MATCH` / `PARTIAL` / `MISSING` / `BOUNDARY_MISMATCH` / `SCOPE_CREEP_VIOLATION` |
 | Notes | One line — why partial, what's missing, or where evidence is thin |
 
 ### Status definitions
@@ -90,7 +110,21 @@ For every requirement extracted in Phase 2, produce one row:
 - **`MATCH`** — requirement is implemented AND there is empirical evidence it works (test + verification report).
 - **`PARTIAL`** — implementation exists but evidence is incomplete (e.g. code present, no test; or test present, no run-time verification).
 - **`MISSING`** — requirement has no corresponding implementation OR no evidence at all.
+- **`BOUNDARY_MISMATCH`** — the requirement was implemented and evidence was cited, but the evidence does not *reach* the claim's boundary (a unit `test-run-log` offered for a `browser` claim), or its `artifact_head_sha` does not match `artifact.head_sha`, or the verdict omits the required Not-established review. This is a distinct failure from a miss: the work may be right and the proof still does not establish it. A `BOUNDARY_MISMATCH` row forces the verdict to `DIVERGES` — it can never render as `CONFORMS` or `PARTIAL`. Name the boundary, the kind cited, and the kind(s) required, citing the `claim-evidence-mapping` taxonomy.
 - **`SCOPE_CREEP_VIOLATION`** — used for `excluded` classification only. An Out-of-Scope item appears to have been shipped anyway. This is a different failure than a miss — it means the agent exceeded the spec.
+
+### Behavior-contract rows (frontend work)
+
+For `behavior` rows, evidence is the contract itself, not prose: the scenario exists in the project's behavior contract with its stable ID, and each required scenario-platform obligation resolves to a mapping in the coverage map (or a dated waiver). Read the generated coverage matrix and run the project's coverage gate rather than inferring from the diff.
+
+- Shipped frontend behavior with **no scenario** → `MISSING`. It is a spec-conformance failure, not a documentation nit.
+- A scenario satisfies this row only when its provenance tag (tracker item reference) names the current work item, or the PRD atom this item implements. A same-ID or coincidentally-matching scenario with no provenance link to this item does not satisfy the row — treat it as `MISSING` and flag the traceability gap; a passing gate elsewhere in the contract proves nothing about *this* requirement.
+- Scenario present but a required scenario-platform obligation has neither a mapping nor a waiver, or the coverage gate fails (stale mapping, invalid waiver, floor regression) → `MISSING`.
+- Scenario, mapping, and a passing coverage gate present, but the mapped test's execution has not been observed to pass (no verification-specialist evidence, no named passing CI run) → `PARTIAL`. The gate only proves the mapping is statically valid — the file exists and the `evidence` string is still present — not that the test currently passes; that is a separate signal per the `bdd-e2e-coverage` rule, and `MATCH` requires both.
+- Scenario and mappings present but the gate was not re-run and the matrix not regenerated → `PARTIAL`.
+- Scenario, mapping, passing gate, AND observed execution evidence that the mapped test passes → `MATCH`.
+
+Per the `bdd-e2e-coverage` rule, a waiver is a dated IOU and never counts as coverage — a row backed only by a waiver is reported as `MISSING`, never `MATCH`, with the waiver and its `recordedAt` date named in the Notes column so the IOU stays visible in the matrix instead of disappearing into a passing status. (There is no separate `WAIVED` status; the existing enum is reused deliberately so a waiver is never mistaken for coverage.) A waiver satisfies the `bdd-e2e-coverage` rule's *definition of done* — it does not block the work item from shipping — but spec-conformance is a stricter accounting lens than that gate: reporting the row as `MISSING` caps this item below `CONFORMS` until the waiver is cleared. That is intentional, not a false failure — it is the mechanism that keeps a waiver from quietly becoming permanent.
 
 ### Scope creep detection
 
@@ -106,9 +140,9 @@ Untraceable changes are not automatic failures. They become findings the human r
 
 Produce exactly one verdict:
 
-- **`CONFORMS`** — every requirement is `MATCH`. No `SCOPE_CREEP_VIOLATION`. Untraceable changes, if any, are clearly refactors or test support.
-- **`PARTIAL`** — some requirements are `PARTIAL` but none are `MISSING` or `SCOPE_CREEP_VIOLATION`. Work is mostly there but evidence is thin.
-- **`DIVERGES`** — at least one requirement is `MISSING`, OR at least one `SCOPE_CREEP_VIOLATION` exists, OR there are substantive untraceable changes that materially alter behavior.
+- **`CONFORMS`** — every requirement is `MATCH`. No `SCOPE_CREEP_VIOLATION`, no `BOUNDARY_MISMATCH`. Untraceable changes, if any, are clearly refactors or test support.
+- **`PARTIAL`** — some requirements are `PARTIAL` but none are `MISSING`, `BOUNDARY_MISMATCH`, or `SCOPE_CREEP_VIOLATION`. Work is mostly there but evidence is thin.
+- **`DIVERGES`** — at least one requirement is `MISSING`, OR at least one `BOUNDARY_MISMATCH` exists, OR at least one `SCOPE_CREEP_VIOLATION` exists, OR there are substantive untraceable changes that materially alter behavior.
 
 A verdict of `PARTIAL` or `DIVERGES` blocks task completion. The caller must resolve the gaps (implement the miss, remove the creep, add the missing evidence) before re-running.
 
@@ -121,15 +155,24 @@ Structure the report so it can be pasted into a PR comment or JIRA ticket:
 
 **Spec source:** <plan file / JIRA key / Linear / GitHub issue / PRD>
 **Shipped scope:** <N commits, M files, K tests on branch <branch> vs <default-branch>>
+**Verdict artifact:** <.lisa/verification-status.json schema v2, artifact.head_sha <sha> — or "v2 verdict not present — boundary reach unverified">
 
 ### Coverage Matrix
 
-| ID | Class | Requirement | Evidence | Status | Notes |
-|----|-------|-------------|----------|--------|-------|
-| AC-1 | acceptance | [text] | [pointer] | MATCH | |
-| AC-2 | acceptance | [text] | — | MISSING | No corresponding code or test |
-| OOS-1 | excluded | [text] | src/foo.ts:42 | SCOPE_CREEP_VIOLATION | Added anyway |
-| ASSERT-1 | assertion | [text] | verification-report §2 | PARTIAL | Asserted in code, not run in verification |
+| ID | Class | Requirement | Evidence | Boundary | Evidence kind | Status | Notes |
+|----|-------|-------------|----------|----------|---------------|--------|-------|
+| AC-1 | acceptance | [text] | [pointer] (AC-1 / EV-1) | browser | screenshot | MATCH | |
+| AC-2 | acceptance | [text] | — | — | — | MISSING | No corresponding code or test |
+| AC-3 | acceptance | [text] | EV-4 | browser | test-run-log | BOUNDARY_MISMATCH | Unit log cannot establish a browser claim — needs screenshot or recording |
+| OOS-1 | excluded | [text] | src/foo.ts:42 | — | — | SCOPE_CREEP_VIOLATION | Added anyway |
+| ASSERT-1 | assertion | [text] | verification-report §2 | http-api | — | PARTIAL | Asserted in code, not run in verification |
+
+### Not Established
+
+Reproduce the verdict's `not_established` entries verbatim, grouped by claim, plus anything the matrix could not confirm. This section is **never omitted and never blank**: with nothing outstanding it renders `None outstanding — reviewed`. State whether `not_established_reviewed` was `true`.
+
+- AC-1 — not exercised on mobile viewports; Safari not tested
+- AC-4 — offline behavior consciously out of scope for this ticket
 
 ### Untraceable Changes
 - src/utils/helpers.ts — extracted shared regex constant (refactor, no behavior change)
@@ -140,6 +183,7 @@ Structure the report so it can be pasted into a PR comment or JIRA ticket:
 **Matches:** N/Total
 **Partial:** N
 **Missing:** N
+**Boundary mismatches:** N
 **Scope creep violations:** N
 **Untraceable changes flagged for review:** N
 
@@ -152,6 +196,8 @@ Structure the report so it can be pasted into a PR comment or JIRA ticket:
 
 - Never substitute "I read the code and it looks right" for empirical evidence. If verification-specialist hasn't run yet, request its report before producing a verdict.
 - Never mark a requirement `MATCH` based on the presence of code alone — evidence means test + runtime observation.
+- Never mark a requirement `MATCH` on evidence that does not **reach** its claim's boundary. Per the `claim-evidence-mapping` contract, a unit `test-run-log` establishes only `code-unit` behavior; cited for a `browser`, `http-api`, `deploy-health`, or `standards-compat` claim it is a `BOUNDARY_MISMATCH`, not a match.
+- Always report the Not-established section, even when empty. A report that lists only what passed is unreadable at a gate.
 - Always surface scope creep separately from misses. They are distinct failures.
 - Always surface untraceable changes — even benign refactors — so the human can confirm intent.
 - The Out of Scope section is load-bearing. If the spec has one, every item must appear in the matrix as `excluded`.

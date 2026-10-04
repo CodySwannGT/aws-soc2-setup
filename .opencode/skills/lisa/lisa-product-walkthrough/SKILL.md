@@ -1,6 +1,6 @@
 ---
 name: lisa-product-walkthrough
-description: "Methodology for evaluating the live product when planning work or evaluating a PRD. Reading a PRD or a mock without seeing the current product produces tickets that misjudge the change — this skill grounds the analysis in what actually exists today. Driving the product is owned by the `use-the-product` core (which detects the product type — DOM web, HTTP/API, canvas game, CLI, IaC — resolves the per-environment mutation policy from .lisa.config.json so production is never mutated by accident, and explores through the project's personas when defined); this skill adds the planning lens. Invoke from notion-to-tracker (Phase 2b live-product walkthrough), jira-create, and any PRD intake flow whose work touches existing user-facing surfaces."
+description: "Methodology for evaluating the…"
 allowed-tools: ["Skill", "Bash", "Read", "mcp__plugin_playwright_playwright__browser_navigate", "mcp__plugin_playwright_playwright__browser_snapshot", "mcp__plugin_playwright_playwright__browser_take_screenshot", "mcp__plugin_playwright_playwright__browser_click", "mcp__plugin_playwright_playwright__browser_type", "mcp__plugin_playwright_playwright__browser_select_option", "mcp__plugin_playwright_playwright__browser_fill_form", "mcp__plugin_playwright_playwright__browser_press_key", "mcp__plugin_playwright_playwright__browser_hover", "mcp__plugin_playwright_playwright__browser_navigate_back", "mcp__plugin_playwright_playwright__browser_resize", "mcp__plugin_playwright_playwright__browser_tabs", "mcp__plugin_playwright_playwright__browser_console_messages", "mcp__plugin_playwright_playwright__browser_network_requests", "mcp__plugin_playwright_playwright__browser_wait_for", "mcp__plugin_playwright_playwright__browser_close"]
 ---
 
@@ -35,6 +35,8 @@ Write this list down. If you can't, the PRD is too vague — note it as a covera
 ## 2. Drive the current product
 
 **Invoke `use-the-product`** to detect the type, resolve the environment + mutation policy, and discover personas — then drive the surfaces from step 1 through its per-type playbook (browser for DOM, `curl` for an API, canvas+input for a game, `cdk synth`/`diff` for IaC). Capture evidence as you go: for a DOM app, a `browser_snapshot` (accessibility tree — best for reasoning) and a `browser_take_screenshot` (visual) per surface and per state, plus `browser_console_messages` / `browser_network_requests` after interactions; for an API, representative request/response pairs; for a game, screenshots of each state. If the project defines personas, walk the surfaces as the relevant archetype(s).
+
+When the resolved DOM environment is non-production with mutation policy `full` and the configured Kane provider passes `lisa kane probe`, `use-the-product` may delegate the bounded journey to `lisa-kane-browser`. Extract its screenshot, HAR/network, console, and result artifacts into the normal Current Product evidence. Never use the expiring Test Manager link as the only evidence. A walkthrough that resolves `read-only` stays on a directly controlled browser backend during the initial Kane rollout.
 
 Honor the mutation gate: on a `read-only` env, observe without submitting; never walk a `forbidden` env (production defaults to forbidden). Treat console errors, 4xx/5xx, and unexpected calls as findings.
 

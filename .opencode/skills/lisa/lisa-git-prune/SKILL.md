@@ -1,6 +1,6 @@
 ---
 name: lisa-git-prune
-description: This skill should be used when pruning local branches that have been deleted on the remote. It fetches remote changes, identifies stale local branches, and safely deletes them.
+description: "pruning local branches that…"
 allowed-tools: ["Bash"]
 ---
 

@@ -40,6 +40,8 @@ jspm_packages
 dist/
 dist
 .build/
+# NestJS pre-push AppModule boot-check scratch dir (untracked; keep out of `git add -A`)
+.build-boot/
 .serverless/
 .serverless
 cdk.out/
@@ -188,14 +190,35 @@ service-key.json
 # Task files
 .windsurfrules
 .taskmasterconfig
-!tasks/tasks.json
+# Ignore stray tasks.json anywhere, but keep the tracked tasks/tasks.json.
+# The broad ignore MUST precede the re-include — gitignore is last-match-wins,
+# so a `tasks.json` rule after `!tasks/tasks.json` would re-ignore it.
 tasks.json
+!tasks/tasks.json
 
 # AI Assistant and MCP
 **/.claude/settings.local.json
 **/.claude/debug/
 **/.claude/worktrees/
 **/.claude/scheduled_tasks.lock
+**/.claude/.lisa-plugins-synced
+**/.claude/.lisa-marketplace-heal-v2
+
+# Second agent worktree root. Sessions and loops park isolated checkouts under
+# a bare `.worktrees/` as well as under `.claude/worktrees/`, and each one
+# carries its own node_modules — measured at 102G across 39 worktrees in one
+# host project. Only `.claude/worktrees/` was ever listed here, so the bare root
+# survived on whatever a developer had hand-added to the machine-local,
+# uncommitted `.git/info/exclude` — invisible to every fresh clone.
+#
+# This entry MUST stay above the `### EASINCLUDE! ###` marker below. The Expo
+# `pre-build:eas` script (expo/package-lisa/package.lisa.json) builds .easignore
+# as `cat .gitignore > .easignore && cat .easignore.extra >> .easignore`, and
+# EAS reads .easignore EXCLUSIVELY — so this file is also what keeps agent
+# worktrees out of the build upload archive. Below the marker it would be
+# re-included, and the worktrees land in the tarball: one observed EAS build
+# compressed to a 1.8 GB archive and failed metadata upload with a 400.
+.worktrees/
 .roo
 .roo/
 .roomodes
@@ -216,6 +239,17 @@ example/
 .cdk.staging
 cdk.out
 
+# Two-snapshot local temp-growth measurement. It records machine paths, inode
+# identity and live process ownership, so it is runtime evidence, not source.
+# Keep this above EASINCLUDE: remote build uploads must not receive local
+# machine/process evidence.
+.lisa/tmpdir-growth.json
+
+# Verbatim work-item bundle written by the implement flow's input-resolver. It
+# can quote credentials from tracker comments and is per-worktree state. Keep
+# this above EASINCLUDE so remote build uploads never receive it.
+.lisa/work-item-context.md
+
 ### EASINCLUDE! ###
 ### BELOW THIS LINE WILL NOT BE IGNORED BY EAS ###
 # aws-exports.js This should be ignored but is needed for eas update
@@ -234,6 +268,50 @@ expo-env.d.ts
 
 .lisa.config.local.json
 .lisa/jira-cli/
+# Transient verification verdict used by Lisa's completion gate. Durable
+# verification evidence belongs under evidence/<ticket>/ and remains trackable.
+.lisa/verification-status.json
+# Latest Health v1 result is local runtime state, never project configuration.
+.lisa/health/latest.json
+# Freshness-bound standards proof is local runtime evidence, not knowledge.
+.lisa/standards/latest.json
+
+# Automation run outcomes — local scheduler observations read by
+# /lisa:automation-status. Runbooks are project knowledge; run records are not.
+.lisa/automations/runs/
+
+# Proof that `lisa apply` completed in THIS checkout, read by `lisa doctor` to
+# report a repo that has silently stopped receiving templates. Machine-local by
+# construction: committing it would churn on every version bump, conflict
+# between developers on different Lisa versions, and lie about a fresh clone
+# that has never installed.
+.lisa/apply-receipt.json
+
+# What the detached lockfile-reconciliation trampoline actually did, read by
+# `lisa doctor`. Machine-local for the same reason as the receipt above: it
+# describes this checkout's last install, not the project, and a committed one
+# would vouch for a clone that has never installed.
+.lisa/reconciliation-report.json
+
+# Repository-readiness report, written by `lisa doctor --readiness`. Derived,
+# not knowledge: every field is recomputed from the tree on the next run, and
+# three of the nine — generated_at, lisa_version, and worker_signature (the
+# host/model/version of the agent runtime that produced it) — describe the RUN,
+# not the repository. Committing it conflicts on every pair of branches that ran
+# doctor, and no resolution of that conflict is correct: a readiness report is
+# one assessment of one tree, so a blend of two describes a tree that never
+# existed. Every consumer reads the on-disk file, which is there whether or not
+# git tracks it. `lisa doctor` warns when a checkout tracks one anyway, because
+# adding this line does not untrack a file already committed
+# (CodySwannGT/lisa#3046).
+.lisa/readiness.json
+.lisa/effectiveness/
+
+# Remote-dispatch ledger. Records the sessions this machine started so a later
+# run can find them. Per developer by construction — each fires their own
+# routine under their own account — so committing it would collide on every
+# dispatch while telling a teammate nothing they can act on.
+.lisa/remote-dispatch.json
 
 # Lisa-generated project Codex overlay. Keep host-owned config.toml and
 # hooks.json visible so projects can commit their own merged configuration.

@@ -1,6 +1,6 @@
 ---
 name: lisa-wiki-connector-web
-description: Ingest a public URL into a sanitized source note for lisa-wiki ingest (via WebFetch). Use only when lisa-wiki-ingest routes to the web connector (a URL input). Read-only.
+description: "Ingest a public URL into a…"
 ---
 
 # lisa-wiki-connector-web

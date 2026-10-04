@@ -1,11 +1,11 @@
 ---
 name: lisa-status
-description: "Report Lisa wiki source freshness across enabled connectors. Read-only — summarizes last ingest evidence, skipped/blocker reasons, and targeted next actions without running ingestion."
+description: "Report Lisa wiki source…"
 ---
 ## Lisa Command Compatibility
 
 - Original Claude command: `/lisa:status`
-- OpenCode invocation: `$lisa-status` or a plain-English request that matches this skill.
+- Codex invocation: `$lisa-status` or a plain-English request that matches this skill.
 - Treat the user's surrounding request as the command arguments.
 - Claude argument hint: `[--json] [--wiki <path>] [--config <path>]`
 

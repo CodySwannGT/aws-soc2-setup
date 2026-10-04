@@ -1,10 +1,60 @@
 ---
 name: lisa-review-local
-description: This skill should be used when performing a code review on local changes on the current branch compared to the main branch. It uses multiple parallel agents to check for bugs, CLAUDE.md compliance, git history context, previous PR comments, and code comment adherence, then scores and filters findings by confidence level.
+description: "performing a code review on…"
 disable-model-invocation: false
 ---
 
 Provide a code review for the local changes on the current branch compared to the main branch.
+
+Apply the `convergent-review` rule throughout this skill: reviewers bias toward
+merge, block only concrete correctness/security/data-loss/contract failures, and
+must label every finding with severity, blocking status, failure scenario,
+evidence, and fix. Lint-owned style, formatting, taste, and speculative
+maintainability feedback are non-blocking unless a repository rule or work item
+explicitly makes them release criteria. A blocking finding without a concrete
+failure scenario is malformed and must be filtered out.
+
+One deterministic gate runs ahead of the judgement-based review and is exempt
+from the confidence filtering below, because it is decided by a script rather
+than by an agent's opinion.
+
+**Design-source gate (`design-source-of-truth` rule).** First read
+`designSource.enabled` in `.lisa.config.json`. Only boolean `false` opts out:
+omit the design-source review step; do not request DESIGN-SOURCE markers, Figma
+nodes, or Figma access for this obligation. Record `SKIPPED: designSource.enabled=false`
+in the review. Absent, true, or invalid values keep enforcement enabled.
+The separate design-value binding review below still applies.
+
+When enabled, run the gate against the branch diff before step 1:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT:-.}/scripts/design-source-gate.mjs" --base=main --head=HEAD
+```
+
+Exit 0 = PASS or explicit SKIPPED, exit 1 = FAIL. A FAIL is a **blocking** review finding and is
+reported verbatim at the top of the review — it is never scored, never filtered
+by confidence, and never demoted to a nitpick. It qualifies under
+`convergent-review` because it names a concrete failure scenario: the design
+source silently diverges from the shipped product and nobody can tell which one
+is authoritative. The gate fails closed, so an unresolvable diff or an unreadable
+file is a FAIL too. Each violation is fixed one of two ways, sync-back first:
+reflect the surface in Figma and cite the node with `DESIGN-SOURCE: <figma-url>`,
+or — only when the surface genuinely does not belong in the design source — mark
+it `DESIGN-SOURCE: none — not in Figma`. Host design-system rules
+(`figma-design-system`, `design-system`, `use-the-design-library`, or the
+project's equivalent) remain authoritative about what to build; this gate only
+asks whether the source is declared. If the gate script is not present (the
+project predates the plugin version that ships it), say so explicitly in the
+review — a silent skip is not one of the exits.
+
+**Design-value binding (`design-value-binding` rule).** A separate, orthogonal
+question about the same surfaces: not *is the source declared* but *are the
+values bound*. In an axis the project publishes design variables for, a literal
+is a **blocking** finding — it is a copied number that will drift when the
+system moves. In an axis with no variable collection, the identical literal is
+correct and must not be flagged; measuring is the legitimate source there, and
+the derived values belong on the work item. Aesthetic disagreement is never a
+finding under this rule. Cite the rule; do not restate its conditions here.
 
 To do this, follow these steps precisely:
 
@@ -24,6 +74,7 @@ To do this, follow these steps precisely:
    c. Agent #3: Read the git blame and history of the code modified, to identify any bugs in light of that historical context
    d. Agent #4: Read previous pull requests that touched these files, and check for any comments on those pull requests that may also apply to the current changes.
    e. Agent #5: Read code comments in the modified files, and make sure the changes comply with any guidance in the comments.
+   Each agent must apply the severity bar from `convergent-review` and return only findings that include a concrete failure scenario and evidence. Non-blocking observations may be summarized separately, but must not be presented as required changes.
 5. For each issue found in #4, launch a parallel Haiku agent that takes the diff, issue description, and list of CLAUDE.md files (from step 2), and returns a score to indicate the agent's level of confidence for whether the issue is real or false positive. To do that, the agent should score each issue on a scale from 0-100, indicating its level of confidence. For issues that were flagged due to CLAUDE.md instructions, the agent should double check that the CLAUDE.md actually calls out that issue specifically. The scale is (give this rubric to the agent verbatim):
    a. 0: Not confident at all. This is a false positive that doesn't stand up to light scrutiny, or is a pre-existing issue.
    b. 25: Somewhat confident. This might be a real issue, but may also be a false positive. The agent wasn't able to verify that it's a real issue. If the issue is stylistic, it is one that was not explicitly called out in the relevant CLAUDE.md.
@@ -31,6 +82,7 @@ To do this, follow these steps precisely:
    d. 75: Highly confident. The agent double checked the issue, and verified that it is very likely it is a real issue that will be hit in practice. The existing approach is insufficient. The issue is very important and will directly impact the code's functionality, or it is an issue that is directly mentioned in the relevant CLAUDE.md.
    e. 100: Absolutely certain. The agent double checked the issue, and confirmed that it is definitely a real issue, that will happen frequently in practice. The evidence directly confirms this.
 6. Filter out any issues with a score less than 80.
+6a. Filter out any blocking issue that does not name a concrete failure scenario in one of the `convergent-review` blocker classes. Keep it only as non-blocking context if it is useful.
 7. Write the review to claude-review.md. When writing your review, keep in mind to:
    a. Keep your output brief
    b. Avoid emojis
@@ -44,6 +96,7 @@ Examples of false positives, for steps 4 and 5:
 - Pedantic nitpicks that a senior engineer wouldn't call out
 - Issues that a linter, typechecker, or compiler would catch (eg. missing or incorrect imports, type errors, broken tests, formatting issues, pedantic style issues like newlines). No need to run these build steps yourself -- it is safe to assume that they will be run separately as part of CI.
 - General code quality issues (eg. lack of test coverage, general security issues, poor documentation), unless explicitly required in CLAUDE.md
+- Findings that restate lint-owned style, formatting, taste, or speculative cleanup as blockers without a concrete failure scenario
 - Issues that are called out in CLAUDE.md, but explicitly silenced in the code (eg. due to a lint ignore comment)
 - Changes in functionality that are likely intentional or are directly related to the broader change
 - Real issues, but on lines that were not modified in the current branch

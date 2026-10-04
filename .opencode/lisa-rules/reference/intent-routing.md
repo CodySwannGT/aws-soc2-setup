@@ -32,9 +32,9 @@ What this rule still enforces:
    > **Orchestration: agent team** (or **single agent**)
    > One-sentence justification.
 
-2. **Cascade rule (load-bearing)**: Before creating a team, check whether you are already operating inside an agent team. Signs you are inside a team: a prior successful team-creation tool call exists in this session; you were spawned into a team context; your context references a team lead. If any of these are true, **do NOT create a second team** — many harnesses reject double-creates and the work stalls — and do NOT collapse the nested flow into inline single-agent work. The nested flow must request the existing team lead add the specialist agent(s) it needs to the current team and coordinate through the shared task state. On Claude, teammates cannot add named teammates (teams are flat), so message the lead with the teammate(s), assignments, and completion criteria. On Codex, ask the addressable lead/root to `multi_agent_v1.spawn_agent` the specialists; if no lead handle exists but spawning is available, spawn the bounded specialist agent(s), `wait_agent`, and relay results upward. Invoke flows via the Skill tool; never satisfy a team-first flow by doing all the work inline.
+2. **Cascade rule (load-bearing)**: Before creating a team, determine your role. You are *inside* an agent team only if you are yourself a spawned teammate/subagent — you were spawned into a team context, or your context references a team lead you report to. A lead/root session is never "inside" a team in this sense, even when a prior team-creation or `Agent` call exists in the session: the lead simply keeps using its existing team (or forms one with its first named spawn) — including when a lifecycle skill is invoked there by `lisa-intake`. If you ARE a spawned teammate, **do NOT create a second team** — many harnesses reject double-creates and the work stalls — and do NOT collapse the nested flow into inline single-agent work. The nested flow must request the existing team lead add the specialist agent(s) it needs to the current team and coordinate through the shared task state. On Claude, teammates cannot add named teammates (teams are flat), so message the lead with the teammate(s), assignments, and completion criteria. On Codex, ask the addressable lead/root to `multi_agent_v1.spawn_agent` the specialists; if no lead handle exists but spawning is available, spawn the bounded specialist agent(s), `wait_agent`, and relay results upward. Invoke flows via the Skill tool; never satisfy a team-first flow by doing all the work inline.
 
-3. **Default mode**: `Research`, `Plan`, `Implement`, `Intake`, and `Debrief` run as agent teams. The `Implement` flow — including every work type (`Build`, `Fix`, `Improve`, `Investigate-Only`) — is **always** a team flow. Bug fixes that "look simple" are not an exception: the Reproduce sub-flow, debug-specialist, bug-fixer, parallel reviewers, and verification-specialist all need to compose. `Debrief` runs as a team because tracker-mining and pr-mining parallelize cleanly and synthesis gates on both completing. `Verify` (standalone) and `Monitor` (standalone) use the One-shot Sub-agents pattern (see `## Orchestration` below) — these flows are linear with no parallelism and the team overhead is not warranted. Single-agent mode is otherwise reserved for: `product-walkthrough` invoked standalone (not as part of Research/Plan), `debrief-apply` (deterministic routing of human-marked dispositions), and one-off diagnostic Bash/Read sessions that don't invoke any lifecycle skill. When in doubt, use a team.
+3. **Default mode**: `Research`, `Plan`, `Implement`, `Intake`, and `Debrief` run as agent teams. (`Intake` is a special case: the Intake skill itself is a thin dispatcher that creates no team and never spawns the lifecycle flow as a subagent — the team is created by the per-item lifecycle skill, `lisa-plan` or `lisa-implement`, that Intake dispatches in-session, so the session still runs as an agent team.) The `Implement` flow — including every work type (`Build`, `Fix`, `Improve`, `Investigate-Only`) — is **always** a team flow. Bug fixes that "look simple" are not an exception: the Reproduce sub-flow, debug-specialist, bug-fixer, parallel reviewers, and verification-specialist all need to compose. `Debrief` runs as a team because tracker-mining and pr-mining parallelize cleanly and synthesis gates on both completing. `Verify` (standalone), `Monitor` (standalone) and `Measure` (standalone) use the One-shot Sub-agents pattern (see `## Orchestration` below) — these flows are linear with no parallelism and the team overhead is not warranted. Single-agent mode is otherwise reserved for: `product-walkthrough` invoked standalone (not as part of Research/Plan), `debrief-apply` (deterministic routing of human-marked dispositions), and one-off diagnostic Bash/Read sessions that don't invoke any lifecycle skill. When in doubt, use a team.
 
 The mechanical team bootstrap directive lives inside each lifecycle skill — see those skills' orchestration preambles for the exact wording. Modern Claude Code uses the implicit team model (the first `Agent` spawn establishes the team); older Claude Code may still expose `TeamCreate`. Other runtimes must use their equivalent team-discovery and team-creation tools, or explicitly declare the no-team fallback when no such tool exists.
 
@@ -64,11 +64,11 @@ Gate:
 
 Sequence:
 1. **Investigate sub-flow** -- gather context from codebase, git history, existing behavior, and external sources
-2. `product-specialist` -- define user goals, user flows (Gherkin), acceptance criteria, error states, UX concerns, and out-of-scope items
+2. `product-specialist` -- define user goals, user flows (Gherkin), acceptance criteria, error states, UX concerns, and out-of-scope items. For frontend scope, the Gherkin flows must satisfy the `bdd-e2e-coverage` rule's scenario shape (behavior stated as Given/When/Then, with the platforms each behavior must hold on) so the PRD converts to behavior-contract scenarios without re-specification
 3. **Edge Case Brainstorm sub-flow** -- run the PRD candidate through the edge-case checklist; fold accepted cases into acceptance criteria, out-of-scope, or open questions
 4. `architecture-specialist` -- assess technical feasibility, identify constraints, map existing system boundaries
-5. Synthesize findings into a PRD containing: problem statement, user stories, acceptance criteria, technical constraints, open questions, and proposed scope
-6. **Plan Phase Tooling** -- review all available skills and agents (project-defined, plugin-provided, and built-in) and determine which ones the Plan phase will need. For each recommended skill or agent, state why it is needed. If no skills or agents beyond the defaults are identified, explicitly justify why the standard set is sufficient. Include this as a "Recommended Tooling for Plan Phase" section in the PRD.
+5. Synthesize findings into a PRD structured as: (1) problem statement, (2) high-level solution description, (3) links to design files/docs if needed, (4) user stories -- each carrying its own functional requirements, non-functional requirements, and a pointer to a design file (only when that story introduces new UI/visual work; omit the pointer otherwise rather than leaving it as a blank required field), (5) overall acceptance criteria, and (6) open questions/decisions. Nest requirements under each story rather than flattening them into global lists -- this keeps the context an agent needs to implement or ticket one story colocated, instead of requiring it to infer which global requirement applies to which story. Any technically viable but genuinely unresolved choice discovered during drafting (for example, a library, framework, or architecture decision with more than one live candidate) MUST be captured as an entry under open questions -- never written into any other section, including the "Recommended Tooling for Plan Phase" section in step 6, as though it were already decided. Every open-questions entry MUST include the drafter's own recommended resolution, with a one-sentence rationale, alongside the question; an open question must never be left bare.
+6. **Plan Phase Tooling** -- review all available skills and agents (project-defined, plugin-provided, and built-in) and determine which ones the Plan phase will need. For each recommended skill or agent, state why it is needed. If no skills or agents beyond the defaults are identified, explicitly justify why the standard set is sufficient. Include this as a "Recommended Tooling for Plan Phase" section in the PRD. This section documents settled recommendations for how to run the Plan phase, meaning which skills or agents to use; it MUST NOT be used to record an unresolved product or technical decision, such as "use library X" when X vs. Y was never actually decided. If step 5 surfaced an unresolved technical choice, it belongs in open questions with a recommendation, not here.
 7. **Create the PRD in the configured source** -- invoke `lisa-prd-source-write` with the synthesized PRD (`title`, `body`, `initial_role` resolved from the caller's `prd_ready` flag — `draft` by default, `ready` when `prd_ready=true`, plus any `dedupe_key`/`marker`/`source_ref` the caller passed). The PRD **lives in the source** (Notion page / Confluence page / GitHub issue / Linear project per `.lisa.config.json` `source`); there is no separate document artifact. A `source` must be configured — if it is not, stop and report it. `prd-source-write` dedupes by marker, so re-running against the same idea references the existing PRD instead of creating a duplicate.
 8. **Record Research usage on the PRD artifact** -- invoke `lisa-usage-accounting` against the created PRD/source artifact so it gains a direct `research` usage entry in the canonical `## Lisa Usage` section at creation time. If the runtime cannot provide trustworthy usage, still write the row with `source: unavailable` and nullable token/cost fields; missing usage is never treated as zero or silently omitted.
 9. `learner` -- capture discoveries for future sessions
@@ -93,8 +93,8 @@ Sequence:
 5. **Implement/Verify Phase Tooling** -- review all available skills and agents (project-defined, plugin-provided, and built-in) and determine which ones the Implement and Verify phases will need for each work item. For each recommended skill or agent, state why it is needed and which work items it applies to. If no skills or agents beyond the defaults are identified for a work item, explicitly justify why the standard set is sufficient.
 6. Decompose into ordered work items (epics, stories, tasks, spikes, bugs). For each item, run the **Edge Case Brainstorm sub-flow** scoped to that item — accepted cases become additional acceptance criteria or sub-tasks; rejected ones are noted with a one-line reason. Each item carries:
    - Type (epic, story, task, spike, bug)
-   - Acceptance criteria (including any added by the per-item brainstorm)
-   - Verification method
+   - Acceptance criteria (including any added by the per-item brainstorm). For a frontend item, these MUST name the behavior-contract update and the aligned e2e automation as explicit deliverables per the `bdd-e2e-coverage` rule -- never left implied
+   - Verification method -- becomes the item's Validation Journey. For a frontend item this MUST name, symmetrically with the acceptance criteria above: the scenario IDs the item will add or change (once known), the platforms each requires, the contract update, and the e2e-sealing evidence markers per the `bdd-e2e-coverage` rule -- a generic "manual QA" or "run the e2e suite" description does not satisfy it
    - Dependencies
    - Skills and agents required (from step 5)
 7. Create work items in the tracker (JIRA, Linear, GitHub) with acceptance criteria, dependencies, and recommended skills/agents
@@ -126,7 +126,7 @@ Determine the work type and execute the matching variant:
 5. `builder` -- implement via TDD (acceptance criteria become tests)
 6. Run quality gates: lint, typecheck, tests (these are prerequisites, NOT verification)
 7. `verification-specialist` -- verify locally (run the software, observe behavior)
-8. `verification-specialist` -- invoke `codify-verification` skill per passing verification (Playwright for UI, integration test for API/DB/auth, etc.); commit each test in the same PR
+8. `verification-specialist` -- invoke `codify-verification` skill per passing verification (integration test for API/DB/auth, benchmark for performance, the project's e2e runner for UI); commit each test in the same PR. For frontend work this also means the `bdd-e2e-coverage` obligations: the Gherkin scenario added/updated with its stable ID, aligned automation in the project's configured runner for every platform that scenario requires, and the coverage gate re-run with the matrix regenerated
 9. **Record Implement usage on the work artifact** -- invoke `lisa-usage-accounting` against the originating work item or implementation artifact so it gains a direct `implement` usage entry in the canonical `## Lisa Usage` section. If the hierarchy / parent refs are already known, prefer `record_and_rollup` so ancestor totals refresh in the same write; otherwise record the direct entry and leave rollup for the next caller that has the child refs. If runtime usage is unavailable, still write `source: unavailable` with nullable token/cost fields instead of omitting the row.
 10. **Review sub-flow**
 11. `learner` -- capture discoveries
@@ -141,7 +141,7 @@ Determine the work type and execute the matching variant:
 6. `bug-fixer` -- implement fix via TDD (reproduction becomes failing test)
 7. Run quality gates: lint, typecheck, tests (these are prerequisites, NOT verification)
 8. `verification-specialist` -- verify locally (prove the bug is fixed)
-9. `verification-specialist` -- invoke `codify-verification` skill to encode the fix as a regression test (mandatory for bug fixes — the test must fail against the pre-fix commit and pass against the fix); commit in the same PR
+9. `verification-specialist` -- invoke `codify-verification` skill to encode the fix as a regression test (mandatory for bug fixes — the test must fail against the pre-fix commit and pass against the fix); commit in the same PR. For a user-visible frontend fix, the `bdd-e2e-coverage` obligations apply as in the Build flow: the scenario the fix restores or changes, aligned automation per required platform, and a passing coverage gate
 10. **Record Implement usage on the work artifact** -- invoke `lisa-usage-accounting` against the originating work item or implementation artifact so it gains a direct `implement` usage entry in the canonical `## Lisa Usage` section. If the hierarchy / parent refs are already known, prefer `record_and_rollup` so ancestor totals refresh in the same write; otherwise record the direct entry and leave rollup for the next caller that has the child refs. If runtime usage is unavailable, still write `source: unavailable` with nullable token/cost fields instead of omitting the row.
 11. **Review sub-flow**
 12. `learner` -- capture discoveries
@@ -166,7 +166,9 @@ Determine the work type and execute the matching variant:
 3. Recommend next action (Research, Plan, Implement, or escalate)
 4. `learner` -- capture discoveries
 
-Output: Code passing all quality gates + local empirical verification + codified regression test for each verification (except for spikes, which produce findings only, and non-behavioral verification types — PR / Documentation / Deploy — which carry their own proof).
+In every work type above, before a task completes -- immediately ahead of the closing `learner` step -- the implementing agent records concise kind-tagged MLD (Mistakes / Learnings / Desires) into that task's `metadata.learnings`: one line per item, empty is valid, never re-prompted or scored. See the `lisa-implement` skill for the full `{ kind, note, evidence? }` schema and routing (change the schema there, not here).
+
+Output: Code passing all quality gates + local empirical verification + codified regression test for each verification (except for spikes, which produce findings only, and non-behavioral verification types — PR / Documentation / Deploy — which carry their own proof). For frontend work the output additionally includes the updated behavior contract, coverage-map mappings for every required scenario-platform obligation, and a regenerated matrix with a passing coverage gate (`bdd-e2e-coverage`).
 
 ### Verify
 
@@ -176,25 +178,20 @@ Gate:
 - Code must pass quality gates (lint, typecheck, tests)
 - Local empirical verification must be complete
 - Each passing local verification must be codified as a regression test (or carry a documented skip from the allowed set: PR / Documentation / Deploy / Investigate-Only). If verifications are not codified, return to the Implement flow's codify step before shipping
+- For frontend work, the `bdd-e2e-coverage` contract must be satisfied: scenarios exist for the shipped behavior, every required scenario-platform obligation is mapped or dated-waived, and the coverage gate passes with the matrix regenerated. A miss returns to Implement — it is a verification failure, not a warning
 - If quality gates fail, go back to **Implement**
 - If no code changes exist, there is nothing to verify
 
 Sequence:
 1. Commit -- atomic conventional commits via `git-commit` skill
 2. PR -- create/update pull request via `git-submit-pr` skill
-3. PR Watch Loop (repeat until mergeable):
-   - If status checks fail -- fix and push
-   - If merge conflicts -- resolve and push
-   - If bot review feedback (CodeRabbit, etc.):
-     - Valid feedback -- implement fix, push, resolve comment
-     - Invalid feedback -- reply explaining why, resolve comment
-   - Repeat until all checks pass and all comments are resolved
-4. Merge the PR
+3. PR Watch Loop -- drive the PR to MERGED via the `drive-pr-to-merge` skill. That skill is the single source of truth for clearing every blocker (auto-merge with direct-merge fallback, `BEHIND` re-sync, conflict resolution, failing-check fixes, human + bot review-comment handling with thread resolution via `pull-request-review`, stale `CHANGES_REQUESTED` dismissal, and post-merge ancestry verification). Do NOT re-implement the loop or its terminal conditions here or in any calling skill.
+4. Merge the PR (owned by `drive-pr-to-merge`, including the auto-merge race and zero-deploy-run checks)
 5. Monitor deploy (watch the deployment action triggered by merge):
    - If deploy fails -- fix, open new PR, return to step 3
 6. Remote verification:
-   - `verification-specialist` -- verify in target environment (same checks as local verification, but on remote)
-   - `ops-specialist` -- post-deploy health check, smoke test, monitor for errors in first minutes
+   - `verification-specialist` -- verify in target environment (same checks as local verification, but on remote). Resolve credentials through the `verification-lifecycle` lookup order before declaring any missing. If they remain genuinely unavailable, do not complete on artifact-only evidence: post a tracker comment naming every credential source checked and what could not be verified as a result, transition the work item to the configured blocked state, and apply the configured `needs-human` / `human-review` label (creating it when the tracker supports label creation and it is missing). The comment is what makes the escalation auditable -- a label alone records that something stopped, not what was tried or why. Evidence must explicitly distinguish `verified empirically` from `artifact-only / verification deferred`
+   - `ops-specialist` -- post-deploy health check via `lisa-monitor <env> --report-only`, smoke test, monitor for errors in first minutes. `--report-only` is REQUIRED: it keeps the post-deploy check a pure health/audit report so monitor's standalone ticket-filing never fires inside a Verify run
    - If remote verification fails -- fix, open new PR, return to step 3
 7. **Record Verify usage on the evidence artifact** -- invoke `lisa-usage-accounting` against the generated evidence artifact (comment body, PR evidence section, or markdown proof) so it gains a direct `verify` usage entry in the canonical `## Lisa Usage` section. If the originating work item or PRD parentage is known, prefer `record_and_rollup` so ancestor totals refresh in the same pass. If runtime usage is unavailable, still write `source: unavailable` with nullable token/cost fields instead of omitting the row.
 8. **Post evidence via the tracker surface** -- invoke `lisa-tracker-evidence` after the usage write so the same canonical evidence artifact is uploaded / posted without hand-editing a second format.
@@ -222,6 +219,11 @@ Sequence:
    - **Process friction** — a step in the lifecycle that consistently slowed the work
    - **Tooling gap** — missing skill, wrong agent assignment, broken hook, missing automation
    - **Convention drift** — an unwritten rule revealed by review comments that should be codified
+   - **Decomposition infidelity** — a ticket distorted the PRD requirement it claimed to implement, and every gate passed it
+   - **PRD defect** — the ticket faithfully captured the PRD, but the PRD itself was wrong, ambiguous, or missing the failing case
+   - **Missing tool access** — an agent lacked a tool, credential, environment, or permission the work required
+
+   The three knowledge categories (recurring gotcha, process friction, convention drift) persist to the committed learnings ledger through the executable contract — never to machine-local memory, host rules (`.agents/rules/`), or `AGENTS.md`.
 4. **Produce the human-triage document** — a markdown file with one row per candidate learning showing: category, summary, evidence (links to the source ticket comment / PR comment / commit), recommended persistence destination, and a checkbox-style disposition field the human will mark (Accept / Reject / Defer). Surface step-1 anomalies (work items missing PRs, etc.) in a separate section. The document is exhaustive — it lists every candidate, even ones the synthesizer rates low confidence — because the human, not the agent, decides what is worth keeping.
 5. **Record Debrief usage on the triage document** — invoke `lisa-usage-accounting` against the generated markdown artifact so the document carries its own direct `debrief` usage entry in the canonical `## Lisa Usage` section. If runtime usage is unavailable, write the entry with `source: unavailable` and nullable token/cost fields rather than skipping it.
 6. **Stop and hand the document to the human.** Debrief does NOT persist accepted learnings itself. The human triages, marks dispositions, and runs the **`/lisa:debrief:apply`** command (skill: `debrief-apply`) to route the accepted items to their destinations.
@@ -325,16 +327,30 @@ Sequence:
 
 The `observability-audit` rule owns the profile detection, rubric, anomaly thresholds, ticket templates (gate-passing), fingerprint/idempotency contract, the cap, and the Verify report-only guard. Monitor **files only** — the `intake` / `tracker-build-intake` cron implements what it files.
 
+### Measure
+
+Purpose: measure **the factory**, where Monitor measures the software it produces. Answers three separate questions — is a configuration good enough to adopt, did capability decline without anyone changing anything, and was the delivered work worth shipping. Repo-scoped, standalone, and report-plus-file like Monitor.
+
+Sequence:
+
+1. `eval-specialist` -- route to the question being asked, and refuse a reading from an unfit instrument (a suite the agents can read, one that no longer resembles the work, or one every candidate passes).
+2. **Qualify or sample** -- `evaluation-suite` when a change is being considered; `capability-drift` when nothing changed and the question is whether the fleet slipped. Both report distributions, never point estimates.
+3. **Report effectiveness** -- `delivery-effectiveness` for the window, paired with autonomy rate from AC7.4, because autonomy alone rewards producing rejected work faster.
+4. **Attribute before filing** -- a confirmed decline is separated into vendor-side change, accumulated local change, or broken harness. "The model got worse" is the most expensive available conclusion and is usually wrong.
+5. **File** -- findings enter intake as build-ready leaves through `tracker-write`, same idempotency and cap discipline as Monitor. Measure files only; it never fixes what it finds, and it never takes on the work it is measuring.
+
+The independence is structural, not procedural: the agent that measures a specialist's output is never the specialist, because a number produced by the thing being judged carries no information.
+
 ## Tracker Entry Point (JIRA, GitHub Issues, or Linear)
 
 When the request references a tracker ticket (a JIRA key like `PROJ-123`, a JIRA URL, a GitHub issue URL, an `org/repo#<n>` token, or a Linear identifier like `ENG-123` or a Linear project URL):
 
-1. Hand off to the matching vendor agent — `jira-agent` (JIRA refs), `github-agent` (GitHub Issue refs), or `linear-agent` (Linear identifier or project URL). The configured destination tracker (`.lisa.config.json` `tracker`) is the default when the ref shape is ambiguous.
+1. Hand off to the matching vendor agent workflow — `jira-agent` (JIRA refs), `github-agent` (GitHub Issue refs), or `linear-agent` (Linear identifier or project URL). The configured destination tracker (`.lisa.config.json` `tracker`) is the default when the ref shape is ambiguous. **Execution mode**: run the vendor agent's workflow in the current (lead) session — its read/verify/triage gates are Skill invocations — and do NOT spawn the vendor agent as a subagent for build work, because step 6's flow delegation must invoke the lifecycle skill (`lisa-implement` / `lisa-plan`) from the lead session, where it can create its agent team.
 2. The agent reads the work item fully via the matching read skill (`jira-read-ticket` / `github-read-issue` / `linear-read-issue`) — description / body, comments, attachments, linked items, parent (Epic / Project / parent Issue), siblings.
 3. The agent validates item quality via the matching verify skill (`jira-verify` / `github-verify` / `linear-verify`).
 4. The agent runs analytical triage via the vendor-neutral `ticket-triage` skill.
 5. If triage finds unresolved ambiguities (`BLOCKED` verdict), the agent posts findings and STOPS -- no work begins.
-6. The agent determines intent and delegates to the appropriate flow:
+6. The agent determines intent and delegates to the appropriate flow by invoking its lifecycle skill (`lisa-implement` for Build / Fix / Improve / Investigate-Only, `lisa-plan` for Plan) via the Skill tool from the lead session:
 
 | Item kind | Flow | Work Type |
 |-----------|------|-----------|

@@ -1,6 +1,6 @@
 ---
 name: lisa-codebase-research
-description: "Codebase exploration and architecture analysis. Read files, trace data flow, identify modification points, map dependencies, find reusable code, evaluate design patterns."
+description: "Codebase exploration and…"
 ---
 
 # Codebase Research

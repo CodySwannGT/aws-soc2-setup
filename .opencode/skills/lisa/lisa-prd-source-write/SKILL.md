@@ -1,6 +1,6 @@
 ---
 name: lisa-prd-source-write
-description: "Vendor-neutral wrapper for creating (or idempotently updating) a PRD in the configured PRD source. The PRD-side sibling of lisa-tracker-write. Resolves `source` from .lisa.config.local.json first (then .lisa.config.json — local overrides global) and dispatches to lisa-notion-write-prd, lisa-confluence-write-prd, lisa-github-write-prd, or lisa-linear-write-prd. Callers (notably lisa-research) MUST invoke this skill instead of a vendor PRD writer directly — that is what makes the PRD source switchable per project. Accepts an `initial_role` of `draft` (default) or `ready` so a freshly created PRD either waits for human promotion or is immediately picked up by lisa-intake; and a stable dedupe marker so re-runs reference the existing PRD instead of creating a duplicate. The PRD lives in the source — there is no separate document artifact."
+description: "Vendor-neutral wrapper for…"
 allowed-tools: ["Skill", "Bash", "Read"]
 ---
 
@@ -38,6 +38,7 @@ ideation_ledger_payload:              # optional; forwarded unchanged to the ven
   selected_idea: "<selected idea title/key>"
   rejected_overlap_candidates: ["<issue refs/titles considered and rejected>"]
   expected_empirical_verification_artifact: "<artifact ref or unavailable>"
+  reproposal_context: "<optional dated decline, new evidence, changed consequence, token and acknowledgment already included in the PRD body by research>"
 ```
 
 `initial_role` semantics are uniform across vendors (the role STRINGS resolve per vendor from
@@ -48,8 +49,10 @@ ideation_ledger_payload:              # optional; forwarded unchanged to the ven
 - **`ready`** → the PRD is created in the source's `ready` PRD role (`prd-ready`), so the PRD-side of
   `lisa-intake` / the `*-prd-intake` scanner auto-claims it on the next cycle.
 
-There is no "omitted = legacy behavior" mode (unlike the ticket-side `build_ready`): there was no
-prior PRD-source-write behavior to preserve, so omitted means `draft`.
+Omitted means `draft` — the not-ready default. This matches the ticket-side `build_ready` contract
+in `ready-role-filing`: on both sides of the pipeline, entering a queue is an **explicit claim** and
+omission is the safe direction. (The ticket side reached that position by removing a per-vendor
+legacy default; the PRD side never had one to remove.)
 
 ## Workflow
 

@@ -2,9 +2,21 @@
 
 These are mandatory disciplines that apply to every session. Full prose, JIRA dev-status query, ADF templates, etc. live in [reference/base-rules.md](../reference/base-rules.md).
 
+## Factory Operating Mode
+
+You are factory machinery, not a chat assistant. Three consequences bind every session:
+
+- **Do not pause mid-flow to ask a human whether to proceed.** Handoff happens at the gates — the ready-role flips and intake's adversarial validation — never in the middle of a flow.
+- **Every admitted flow must work headless**: no interactive prompts after admission, idempotent re-runs, clean exits on empty queues. Resolve required input before admission: interactive requests may need clarification; unattended requests with missing input return `recovery-required` without guessing or applying side effects. Flows run under native schedulers as often as under a human.
+- **Never weaken a gate to get work through it — fix the work.**
+
+The model these follow from (the four factories, the gate, the loops, the brownfield on-ramp) is [reference/factory-model.md](../reference/factory-model.md); read it when you need the shape rather than the obligations.
+
 ## Requirement Verification
 
 Treat every request as potentially underspecified. Before starting any work:
+
+**Unattended: override stop-and-ask below.** Missing input means `recovery-required`: no guessing, prompts or side effects. Ask only before interactive admission.
 
 1. Identify ambiguities that would prevent completion. If any exist, stop and ask.
 2. Identify open questions whose answers would change your approach. If any exist, stop and ask.
@@ -28,6 +40,8 @@ Do not begin work if there are blockers, ambiguities, access requirements, or un
 - When a hook or quality gate fails, fix the root cause first. If no fix is genuinely possible, ask the user to make the risk-acceptance decision and add a specific documented ignore; never use a blanket bypass.
 - **Never bypass branch protection** — no `--admin`, `--force`, no merging a PR with failing CI. "Green in CI" is the definition of done.
 - Never commit directly to environment branches (`dev`, `staging`, `main`).
+- **Never use plain `git push --force`.** When a history rewrite is explicitly approved, use `--force-with-lease`; prefer the SHA-bound form `--force-with-lease=<ref>:<sha>`, where `<sha>` is the exact remote tip the approval covered.
+- **History-rewrite approval is SHA-scoped, not durable.** If the remote ref moves or the lease rejects, the approval is void. Stop and obtain fresh confirmation for the new remote state; never re-derive consent from the earlier approval. Fetching again does not renew consent.
 - Prefix `git push` with `GIT_SSH_COMMAND="ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=5"`.
 - When opening a PR, watch it. Fix every failing check and every valid bot review comment. Resolve threads. Loop until merged.
 - After merging into an environment branch, watch the deploy. If it fails, fix it and open a new PR.

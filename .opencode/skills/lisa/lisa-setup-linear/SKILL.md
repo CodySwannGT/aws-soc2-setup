@@ -1,14 +1,21 @@
 ---
 name: lisa-setup-linear
-description: "Configure Linear as the destination tracker and/or the PRD source for this project. Verifies Linear access (MCP OAuth or a personal API key in OS keychain), resolves the workspace slug and team key, scaffolds the build-queue issue-label namespace (`status:*`) when Linear is the tracker and/or the PRD-lifecycle project-label namespace (`prd-*` + issue-level sentinel) when Linear is the PRD source, writes the `linear` section into `.lisa.config.json`, and offers to set top-level `tracker: \"linear\"` and/or `source: \"linear\"`. Idempotent — re-running updates the existing section and reuses existing labels. No /lisa:setup:atlassian prerequisite."
+description: "Configure Linear as the…"
 allowed-tools: ["Bash", "Read", "Write", "Edit", "Skill", "AskUserQuestion", "mcp__linear-server__authenticate", "mcp__linear-server__complete_authentication"]
 ---
 
 # Setup Linear: $ARGUMENTS
 
-Make Linear a tracker, a PRD source, or both for this project. After this skill, `.lisa.config.json` contains `linear.workspace` (+ `linear.teamKey` when Linear is the tracker), the team carries the lifecycle label namespaces lisa needs, and (optionally) `tracker` / `source` point at Linear.
+Make Linear a tracker, a PRD source, or both for this project. After this skill, `.lisa.config.json` contains `linear.workspace` (+ `linear.teamKey` when Linear is the tracker), the team carries the lifecycle states and label namespaces lisa needs, and (optionally) `tracker` / `source` point at Linear.
 
-Linear's data model splits labels into two **kinds** that matter here: **issue labels** (drive the build queue, `status:*`) and **project labels** (drive the PRD lifecycle, `prd-*`). They are distinct namespaces in Linear and are NOT interchangeable — the build lifecycle lives on Issues, the PRD lifecycle lives on Projects. The sentinel feedback marker is an **issue** label even though it belongs to the PRD flow (Linear's MCP has no project-level comments — see `linear-prd-intake`).
+The two lifecycles run on different primitives, and conflating them is the most common setup error:
+
+- **Build queue → native workflow STATES**, read from `linear.workflow.*`. Not labels. See "Why Linear uses states, not labels" in `config-resolution`, and Step 3a below. `lisa-linear-build-intake` reads only these.
+- **PRD lifecycle → PROJECT labels** (`prd-*`), because a PRD is a Linear Project.
+
+Project labels and issue labels are distinct namespaces in Linear and are NOT interchangeable — creating an issue label named `prd-ready` will not work for the PRD flow. Every PRD-lifecycle label this skill creates is a **project** label; the PRD flow needs no issue label at all, because clarifying-question comments go on the project itself (see `linear-prd-intake`).
+
+**A `status:*` issue-label namespace is no longer scaffolded or read.** It was the pre-state-model build lane; see "Migrating a project that predates the state model" below for what to do with a config that still carries it.
 
 ## Workflow
 
@@ -28,10 +35,10 @@ Ask two things via `AskUserQuestion`.
 
 > What should lisa use Linear for?
 >
-> 1. **Destination tracker** — lisa writes Epics→Projects, Stories→Issues, Sub-tasks→Sub-issues; the build queue runs off the `status:*` issue-label namespace. Sets `tracker: "linear"`. (Requires a team key.)
+> 1. **Destination tracker** — lisa writes Epics→Projects, Stories→Issues, Sub-tasks→Sub-issues; the build queue runs off native workflow **states** (`linear.workflow`), not labels. Sets `tracker: "linear"`. (Requires a team key.)
 > 2. **PRD source** — humans flag Linear **projects** with `prd-ready`; `/lisa:intake` scans and ticketes them off the `prd-*` project-label namespace. Sets `source: "linear"`.
 
-The role answer drives Step 3 (which label namespaces to scaffold) and whether `teamKey` is required (tracker → yes).
+The role answer drives Step 3 (states for the tracker lane, `prd-*` project labels for the PRD lane) and whether `teamKey` is required (tracker → yes).
 
 ### Step 1 — Establish Linear access
 
@@ -82,15 +89,63 @@ read_linear_key() {  # $1=workspace slug
   local slug; slug=$(echo "$ws" | tr '[:upper:]-' '[:lower:]_')
   local varname="LINEAR_API_KEY_${slug}"
   [ -n "${!varname}" ] && { echo "${!varname}"; return; }
+  # Preferred path: the single secrets chokepoint. It owns the one-store rule
+  # and the surface ladder, so anything it can answer must not be read out of an
+  # OS keychain here — a second reader is how the same credential ends up living
+  # in two places and drifting.
+  #
+  # The CANDIDATE LADDER below must stay identical to `linear-access`. What may
+  # differ is only what happens after it: `linear-access` has nowhere else to
+  # go and fails loudly, whereas this skill falls through to the legacy keychain
+  # rung. Stating the invariant as "the ladder" rather than "this function" is
+  # deliberate — the previous wording said to keep the whole thing identical,
+  # which is not achievable, and a rule that cannot be followed is a rule that
+  # gets ignored. That is exactly how this copy kept the two-rung ladder while
+  # `linear-access` grew to seven, leaving `/lisa:setup:linear` unable to reach
+  # a key that `lisa-linear-access` could read from the same repository.
+  #
+  # Ordered across trusted machine-managed substrates, ending at the installed
+  # package. Checkout-local paths are deliberately absent: a familiar generated
+  # destination is still repository-controlled executable code. The plugin
+  # rungs are the floor: `resolve-secret.mjs` ships beside this skill, so a rung
+  # pointing at it is reachable from anywhere the plugin itself is installed.
+  # Execute only machine-managed plugin/package resolvers. Checkout-local
+  # candidates are repository-controlled code, not trusted merely by path.
+  local candidates=()
+  if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+    candidates+=("$CLAUDE_PLUGIN_ROOT/skills/lisa-secrets-access/scripts/resolve-secret.mjs")
+  fi
+  if [ -n "${PLUGIN_ROOT:-}" ]; then
+    candidates+=("$PLUGIN_ROOT/skills/lisa-secrets-access/scripts/resolve-secret.mjs")
+  fi
+  # Last rung deliberately needs no environment variable: an agent that was
+  # never handed a plugin root still has the installed package to fall back on.
+  candidates+=(node_modules/@codyswann/lisa/plugins/lisa/skills/lisa-secrets-access/scripts/resolve-secret.mjs)
+
+  local resolver
+  local tried=()
+  for resolver in "${candidates[@]}"; do
+    tried+=("$resolver")
+    if [ -f "$resolver" ]; then
+      local via_lisa
+      via_lisa=$(node "$resolver" get LINEAR_API_KEY 2>/dev/null) \
+        && [ -n "$via_lisa" ] && { echo "$via_lisa"; return; }
+      # Empty/error means this substrate had no answer; try the next trusted one.
+    fi
+  done
+  # Legacy fallback: the OS keychain written by the guided flow below, for
+  # projects that have not adopted a credentials provider. Reached only when the
+  # chokepoint is absent or has no entry.
+  local from_keychain=""
   case "$(uname -s)" in
-    Darwin)  security find-generic-password -s lisa-linear -a "$ws" -w 2>/dev/null ;;
-    Linux)   command -v secret-tool >/dev/null && secret-tool lookup service lisa-linear account "$ws" 2>/dev/null ;;
+    Darwin)  from_keychain=$(security find-generic-password -s lisa-linear -a "$ws" -w 2>/dev/null) ;;
+    Linux)   command -v secret-tool >/dev/null && from_keychain=$(secret-tool lookup service lisa-linear account "$ws" 2>/dev/null) ;;
     MINGW*|MSYS*|CYGWIN*)
       # `cmdkey /generic ... /pass:` stores the secret in Windows Credential Manager, but
       # `cmdkey /list` never prints stored passwords (by design). Read the CredentialBlob
       # back via the Win32 CredRead API through PowerShell; pass the target name via an env
       # var to dodge nested quoting, and strip the CRLF powershell.exe appends.
-      LISA_CRED_TARGET="lisa-linear-${ws}" powershell.exe -NoProfile -NonInteractive -Command '
+      from_keychain=$(LISA_CRED_TARGET="lisa-linear-${ws}" powershell.exe -NoProfile -NonInteractive -Command '
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -116,8 +171,20 @@ public static class LisaCred {
   }
 }
 "@
-[LisaCred]::Read($env:LISA_CRED_TARGET)' 2>/dev/null | tr -d '\r' ;;
+[LisaCred]::Read($env:LISA_CRED_TARGET)' 2>/dev/null | tr -d '\r') ;;
   esac
+  [ -n "$from_keychain" ] && { echo "$from_keychain"; return; }
+
+  # Name every path, the same way `linear-access` does — the diagnostics are
+  # part of the parity, not decoration. A silent empty return sends the next
+  # reader hunting for a resolver they cannot see the absence of; the
+  # enumeration turns that into a seconds-long diagnosis. Paths and store
+  # coordinates only — never any resolved value, on any path.
+  echo "Error: could not resolve LINEAR_API_KEY through lisa-secrets-access or the legacy keychain." >&2
+  echo "Tried, in order (relative paths are from $PWD):" >&2
+  printf '  %s\n' "${tried[@]}" >&2
+  echo "  <OS keychain> service=lisa-linear account=$ws" >&2
+  return 1
 }
 
 KEY=$(read_linear_key "$WORKSPACE")
@@ -139,7 +206,7 @@ echo "Linear key validated. Org: $(echo "$VIEWER" | jq -r '.data.organization.ur
 - **Workspace slug**: honor `--workspace=<slug>`. Otherwise derive from the validated identity — the GraphQL `organization.urlKey` (API path) or the team list's workspace (MCP path). Confirm with the user; this slug is the keychain `account` key and the multi-workspace disambiguator.
 - **Team key** (required when Linear is the **tracker**): honor `--team=<KEY>`. Otherwise enumerate teams via `lisa-linear-access operation: list-teams({})` (or the GraphQL `teams` query) and present them via `AskUserQuestion` (label = team key, description = team name) for the user to pick the team that owns lisa's destination Issues. If Linear is source-only, `teamKey` is optional — skip unless the user wants to pin a team scope.
 
-### Step 3 — Scaffold the lifecycle label namespaces
+### Step 3 — Scaffold the lifecycle namespaces
 
 Read role → label with the default-fallback ladder the intake skills use, so scaffolded labels match exactly what they query.
 
@@ -152,19 +219,51 @@ read_role() {  # $1=namespace (build|prd) $2=role $3=default
 }
 ```
 
-#### 3a. Build-queue labels — ISSUE labels (only if Linear is the tracker)
+#### 3a. Build-queue lifecycle — WORKFLOW STATES (only if Linear is the tracker)
 
-Probe with `lisa-linear-access operation: list-issue-labels` (scoped to the team). For each role's resolved name, create it via `lisa-linear-access operation: create-issue-label` only if absent. The `done` role is env-keyed — create all three defaults; collapse to a single string in config later if the project's terminal state is env-independent.
+The build lane resolves to native workflow **states**, not labels — see "Why Linear uses states, not labels" in `config-resolution`. Read role → state name with the same ladder, against `linear.workflow`:
 
-| Role | Default | 
-|------|---------|
-| `ready` | `status:ready` |
-| `claimed` | `status:in-progress` |
-| `review` | `status:code-review` |
-| `blocked` | `status:blocked` |
-| `done.dev` | `status:on-dev` |
-| `done.staging` | `status:on-stg` |
-| `done.production` | `status:done` |
+```bash
+read_state() {  # $1=role path (e.g. ready, done.dev) $2=default
+  local role="$1" default="$2" local_v global_v
+  local_v=$(jq -r ".linear.workflow.${role} // empty" .lisa.config.local.json 2>/dev/null)
+  global_v=$(jq -r ".linear.workflow.${role} // empty" .lisa.config.json 2>/dev/null)
+  echo "${local_v:-${global_v:-$default}}"
+}
+```
+
+Enumerate the team's states with `lisa-linear-access operation: list-workflow-states` (each carries `id`, `name`, `type`, `position`). For each role, resolve in this order — the same cascade `lisa-setup-jira` uses, with one extra rung Linear affords that JIRA does not:
+
+1. **Exact name match** → resolved, nothing to do. For `ready`, additionally refuse to resolve onto the team's DEFAULT state (`Todo` on a stock team): that inverts the gate from "a human flipped this" to "nobody has touched this" and makes every untouched backlog item claimable. Offer to create a dedicated state instead.
+2. **A plausible existing state of the right `type`** (`ready` → `unstarted`, `claimed`/`review` → `started`, `blocked` → `started` or `unstarted`, terminal `done` → `completed`) → present the team's state list via `AskUserQuestion` and let the user pick which state means this role. Record the choice as a config override in Step 4.
+3. **Nothing plausible** → offer to **create** the state via `lisa-linear-access operation: create-workflow-state` (name, `type`, `position`, colour), showing the exact name and type first. Linear's API permits this where JIRA's workflow editing is admin-gated — which is why this rung exists here and not there.
+4. **User declines creation** → stop and say which role is unresolvable and that the lifecycle cannot run without it. Never silently fall back to a state whose meaning differs, and never invent a name in config that does not exist in the team.
+
+| Role | Default state | `type` | Ships with a stock team? |
+|------|---------------|--------|--------------------------|
+| `ready` | `Ready` | `unstarted` | **no — must be created or mapped** |
+| `claimed` | `In Progress` | `started` | yes |
+| `review` | **none — optional, never seeded** | `started` | n/a |
+| `blocked` | `Blocked` | `unstarted` | **no — must be created or mapped** |
+| `done.dev` | `On Dev` | `started` | **no — must be created or mapped** |
+| `done.staging` | `On Stg` | `started` | **no — must be created or mapped** |
+| `done.production` | `Done` | `completed` | yes |
+
+**`review` is OPTIONAL and this setup NEVER binds it unprompted.** It has no
+default state, so there is nothing to resolve unless the user asks for a review
+hold; leaving `linear.workflow.review` absent is a supported configuration
+meaning the project runs no agent review step, and lifecycle skills skip that
+transition entirely (`config-resolution` R1). Writing a binding a project did
+not ask for is how agent-owned work reaches a human-only review lane — the
+stock `In Review` state a team happens to ship is not evidence the project
+wants one. Offer it only on an explicit request, and resolve it through the
+same four-rung cascade as any other role.
+
+**The env rungs are deliberately `started`, not `completed`.** `On Dev` and `On Stg` mean "merged and deployed *that far*" — work that is emphatically not finished. Typing them `completed` would make Linear treat them as closed: they would leave the active board, stop counting in cycles, and re-create the exact premature-closure problem this model exists to fix. Only `done.production` is `completed`.
+
+**Position them between `In Review` and `Done`** so the board reads left-to-right in real lifecycle order. A team that orders its board differently can pass its own `position`.
+
+**Turn off the team's `merge → Done` git automation.** Linear's per-team git automations (Settings → Team → Workflow, or the `gitAutomationStates` API) auto-complete an Issue on merge to **any** branch. With this model that automation is an unwanted second writer: it jumps an Issue straight to `Done` at a `dev` merge, skipping `On Dev` / `On Stg` and asserting production-done. Lisa itself moves the state at each rung, so the automation is redundant as well as wrong. Detect it and offer to delete it; leave `start` and `review` alone — those assert non-terminal states and are harmless.
 
 #### 3b. PRD-lifecycle labels — PROJECT labels (only if Linear is the PRD source)
 
@@ -181,7 +280,7 @@ Probe with `lisa-linear-access operation: list-project-labels`. Create missing o
 | `ticketed` | `prd-ticketed` | project label |
 | `shipped` | `prd-shipped` | project label |
 | `verified` | `prd-verified` | project label |
-| `sentinel` | `prd-intake-feedback` | **issue** label (marks the sentinel feedback issue — create via `create_issue_label`) |
+| `sentinel` | `prd-intake-feedback` | **Legacy, not created.** An issue label that marked the fabricated feedback issues earlier versions used before project-level comments were wired up. Configured only so the rollup can recognise and exclude an existing one; a fresh workspace never needs it |
 
 #### 3c. Handle name collisions / renames
 
@@ -205,13 +304,38 @@ if [ -n "$TEAM_KEY" ]; then
      .lisa.config.json > .lisa.config.json.tmp && mv .lisa.config.json.tmp .lisa.config.json
 fi
 
-# Conditionally write label overrides (only non-default role names).
+# Conditionally write label overrides (markers + PRD lane only — the build lane
+# is states now, and lives under .linear.workflow below).
 if [ -n "$LABEL_OVERRIDES_JSON" ] && [ "$LABEL_OVERRIDES_JSON" != "{}" ]; then
   jq --argjson o "$LABEL_OVERRIDES_JSON" \
      '.linear.labels = ((.linear.labels // {}) * $o)' \
      .lisa.config.json > .lisa.config.json.tmp && mv .lisa.config.json.tmp .lisa.config.json
 fi
+
+# Workflow-state overrides: only roles whose resolved state name differs from
+# the default, INCLUDING any the user mapped onto an existing state in 3a.
+if [ -n "$WORKFLOW_OVERRIDES_JSON" ] && [ "$WORKFLOW_OVERRIDES_JSON" != "{}" ]; then
+  jq --argjson w "$WORKFLOW_OVERRIDES_JSON" \
+     '.linear.workflow = ((.linear.workflow // {}) * $w)' \
+     .lisa.config.json > .lisa.config.json.tmp && mv .lisa.config.json.tmp .lisa.config.json
+fi
 ```
+
+**Migrating a project that predates the state model.** A config carrying
+`linear.labels.build.{ready,claimed,review,blocked,done}` was written against the
+old label-driven lane. Those keys are inert now — nothing reads them — but
+leaving them in place reads as configuration and will mislead the next person.
+Migrate in one pass, and do it before the first intake cycle runs, or that cycle
+sees an empty queue:
+
+1. Resolve each build role to a state per 3a, writing `linear.workflow`.
+2. **Backfill live Issues**: for every Issue carrying a `status:*` label, set its
+   workflow state to the role that label encoded. Do this before deleting
+   anything — the labels are the only record of where each Issue sits.
+3. Drop `build.{ready,claimed,review,blocked,done}` from `linear.labels`, keeping
+   `build.human_needed` and the whole `prd` map.
+4. Leave the `status:*` labels themselves in the workspace, unapplied, until the
+   first intake cycle after the migration has run green. They are the rollback.
 
 No secrets in config — the API key stays in keychain / `LINEAR_API_KEY`, the MCP session in its own store.
 
@@ -233,7 +357,7 @@ jq -e '.linear.workspace' .lisa.config.json >/dev/null
 [ "$(jq -r '.tracker // empty' .lisa.config.json)" = "linear" ] && jq -e '.linear.teamKey' .lisa.config.json >/dev/null
 ```
 
-Confirm the scaffolded labels are present (`list_issue_labels` for `status:*` + the sentinel; `list_project_labels` for `prd-*`, including the terminal `prd-verified`). Report success with the resolved workspace, team key (if any), which namespaces were scaffolded (created vs. already existed), any non-default overrides, and whether `tracker` / `source` were set. Direct the user to `/lisa:intake` to test.
+Confirm what was scaffolded is present: `list-workflow-states` for every build role when Linear is the tracker, `list-project-labels` for `prd-*` (including the terminal `prd-verified`) when Linear is the PRD source. Do NOT expect a `status:*` namespace — it is not part of this model. Report success with the resolved workspace, team key (if any), which namespaces were scaffolded (created vs. already existed), any non-default overrides, and whether `tracker` / `source` were set. Direct the user to `/lisa:intake` to test.
 
 ## Idempotency
 
@@ -245,7 +369,7 @@ Confirm the scaffolded labels are present (`list_issue_labels` for `status:*` + 
 
 - Never write the API key to `.lisa.config.json`. It stays in keychain or `LINEAR_API_KEY`.
 - Never accept the API key via this skill's stdin/chat — always the platform clipboard-pipe pattern, so the value never enters the LLM context.
-- Never conflate the two label kinds: build labels are **issue** labels, PRD labels are **project** labels. The sentinel is an issue label. Creating the wrong kind silently breaks the corresponding intake flow.
+- Never conflate the two label kinds: build labels are **issue** labels, PRD labels are **project** labels. Creating the wrong kind silently breaks the corresponding intake flow.
 - Never create a duplicate label for a role that already has a (differently-named) label — map and record an override instead.
 - Never set `tracker` / `source` without explicit confirmation — they're project-wide switches.
 - Never invent a workspace slug or team key. Derive from the validated identity / team list and confirm; if resolution fails, ask the user.

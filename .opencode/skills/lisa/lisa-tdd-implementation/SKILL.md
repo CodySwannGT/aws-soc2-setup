@@ -1,6 +1,6 @@
 ---
 name: lisa-tdd-implementation
-description: "Test-Driven Development implementation workflow. RED: write failing test, GREEN: minimum code to pass, REFACTOR: clean up. Includes task metadata requirements, verification, and atomic commit practices."
+description: "Test-Driven Development…"
 ---
 
 # TDD Implementation
@@ -64,12 +64,17 @@ TDD Cycle:
 - If the imported module doesn't exist, Jest reports 0 tests found (not N failed) — this is expected RED behavior
 - For a Fix task, or a Build task that changes user-visible behavior, include a regression test at the highest practical observation level for the reported surface. If the project has a browser, device, or end-to-end harness for that platform (for example Playwright, Maestro, Detox, Cypress, or an equivalent runtime), the RED test plan must include a deterministic spec against the reported surface, using mocked or seeded data where needed.
 - The team lead may not waive, defer, or mark that user-visible regression spec as optional, "if cheap", or equivalent. The only exits are a recorded absence of an end-to-end harness for the affected platform, or a genuine technical blocker with a linked build-ready follow-up ticket created before merge and referenced from the PR and source work item.
+- For frontend work, the `bdd-e2e-coverage` rule governs what that spec is sealing: before writing it, add or update the Gherkin scenario with its stable ID in the project's behavior contract, then write aligned automation in the project's configured runner for each platform the scenario requires. The scenario is the specification the RED test encodes — write the scenario first, in the same PR.
 - A regression spec is not complete merely because it exists. Completion evidence must prove the spec actually ran and passed in PR CI with a named log line, reporter output, or equivalent execution record. Guard against `test.skip`, suite-level environment gates, shard filters, and "0 tests" passes.
+- When the work item **prescribes an existing test as the control** — "that test must go red; if it still passes the fix did nothing" — the `control-reachability` rule governs what a green control means. It is two facts, not one: the change had no effect (revisit the change), or the fixture never reached the changed path (fix or extend the control — do **not** revert). They demand opposite actions, and the cheaper reading wins by default when nothing forces the distinction. **Establish which holds before acting on the stopping rule, and prove reachability by execution, never by reading the fixture** — a temporary `throw` at the top of the changed block run under that one test, or coverage scoped to that test alone. Never revert on an unexplained green; an unexplained control is a blocked observation, not a verdict. If the item carries a `[CONTROL: <test> | reaches: <input>]` marker, that marker is the claim you are checking.
 
 ### GREEN Phase
 
 - Write the minimum production code to make the test pass
 - Do not optimize, do not add features beyond what the test requires
+- Read `designSource.enabled` in `.lisa.config.json` before preparing design-source instructions. Only boolean `false` opts out: omit the design-source step and do not request DESIGN-SOURCE markers, Figma nodes, or Figma access for this obligation. Absent, true, or invalid values keep enforcement enabled.
+- When enabled, for any UI surface the implementation adds or changes, the `design-source-of-truth` rule requires its design-source declaration to land in the same commit as the surface it describes — `DESIGN-SOURCE: <figma-url>` when the surface is backed by a Figma node (sync it back first if Figma access exists), or the exception marker `DESIGN-SOURCE: none — not in Figma` when it genuinely is not captured at the source. `scripts/design-source-gate.mjs` fails closed on an undeclared surface. Cite the rule; do not restate its marker grammar here.
+- Separately, the `design-value-binding` rule governs where each *value* on that surface came from: in an axis with a published variable collection, bind the variable and use a screenshot only to verify; in an axis with none, measure and record what you derived. A literal in a typed axis is a block, not a TODO. Cite the rule; do not restate its conditions here.
 - The goal is the simplest code that makes the test green
 
 ### REFACTOR Phase

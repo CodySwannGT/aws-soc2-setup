@@ -1,6 +1,6 @@
 ---
 name: lisa-github-prd-intake
-description: "Scans a GitHub repository for issues carrying the configured `ready` PRD label and runs the first eligible one through the dry-run validation pipeline. A PRD that passes every gate gets tickets written (to whatever destination tracker is configured — JIRA, GitHub Issues itself, or Linear) and the label flipped to the configured `ticketed` label; a PRD that fails gets clarifying-question comments and the label flipped to the configured `blocked` label. The GitHub counterpart of lisa-notion-prd-intake / lisa-confluence-prd-intake / lisa-linear-prd-intake. Composes existing skills (github-to-tracker, tracker-validate, tracker-source-artifacts, product-walkthrough)."
+description: "Scans a GitHub repository for…"
 allowed-tools: ["Skill", "Bash"]
 ---
 
@@ -19,25 +19,17 @@ Run one intake cycle against that repo. The first eligible issue with the `ready
 PRD label names are read from `.lisa.config.json` `github.labels.prd.*`, falling back to defaults documented in the `config-resolution` rule. Bash pattern:
 
 ```bash
-# Read role with default fallback. Local overrides global per-key.
-read_role() {
-  local role="$1" default="$2"
-  local local_v global_v
-  local_v=$(jq -r ".github.labels.prd.${role} // empty" .lisa.config.local.json 2>/dev/null)
-  global_v=$(jq -r ".github.labels.prd.${role} // empty" .lisa.config.json 2>/dev/null)
-  echo "${local_v:-${global_v:-$default}}"
-}
-
-READY=$(read_role ready "prd-ready")
-IN_REVIEW=$(read_role in_review "prd-in-review")
-BLOCKED=$(read_role blocked "prd-blocked")
-TICKETED=$(read_role ticketed "prd-ticketed")
-SHIPPED=$(read_role shipped "prd-shipped")
+ROLE_RESOLVER="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-plugins/lisa}}/scripts/resolve-lifecycle-role.mjs"
+READY=$(node "$ROLE_RESOLVER" --role prd.ready --vendor github --intent write) || exit $?
+IN_REVIEW=$(node "$ROLE_RESOLVER" --role prd.in_review --vendor github --intent write) || exit $?
+BLOCKED=$(node "$ROLE_RESOLVER" --role prd.blocked --vendor github --intent write) || exit $?
+TICKETED=$(node "$ROLE_RESOLVER" --role prd.ticketed --vendor github --intent write) || exit $?
+SHIPPED=$(node "$ROLE_RESOLVER" --role prd.shipped --vendor github --intent write) || exit $?
 ```
 
 In prose below, the role names refer to the resolved labels: e.g. "the `ready` label" means whatever `github.labels.prd.ready` resolves to (default: `prd-ready`).
 
-This skill is the GitHub counterpart of `lisa-notion-prd-intake`, `lisa-confluence-prd-intake`, and `lisa-linear-prd-intake`. Phases, gates, comment templates, and rules are identical — the only differences are (1) the lifecycle is encoded as **issue labels** (mirroring Linear's project labels and Confluence's page labels), (2) the fetch / update tools are the `gh` CLI, and (3) clarifying-question comments land directly on the source PRD issue (because GitHub Issues *do* have native comments — no sentinel issue required, unlike Linear). Keep all four skills behaviorally aligned: when changing intake logic, change them together.
+This skill is the GitHub counterpart of `lisa-notion-prd-intake`, `lisa-confluence-prd-intake`, and `lisa-linear-prd-intake`. Phases, gates, comment templates, and rules are identical — the only differences are (1) the lifecycle is encoded as **issue labels** (mirroring Linear's project labels and Confluence's page labels), (2) the fetch / update tools are the `gh` CLI, and (3) clarifying-question comments land directly on the source PRD issue. Keep all four skills behaviorally aligned: when changing intake logic, change them together.
 
 The **PRD shipped rollup phase (3f)** transitions a `$TICKETED` PRD to `$SHIPPED` once all its generated top-level work is terminal, per the `prd-lifecycle-rollup` rule. This phase is GitHub-only here because its vendor surface (issue close + labels via `gh`) is GitHub-specific; the Linear / Confluence / Notion intake skills carry the **same** vendor-neutral rollup with their own surfaces (sibling sub-task #584, now landed). All four intake skills are behaviorally aligned across the rollup phase too — keep them in sync when changing rollup logic.
 

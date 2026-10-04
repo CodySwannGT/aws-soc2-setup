@@ -1,6 +1,6 @@
 ---
 name: lisa-wiki-connector-slack
-description: Ingest a Slack channel into sanitized source notes via a user token. Use only when lisa-wiki-ingest routes to the slack connector AND the run carries explicit external-write intent (Slack OAuth opens a browser and stores a token file). Centralized stdlib-Python scripts; secrets are redacted.
+description: "Ingest a Slack channel into…"
 ---
 
 # lisa-wiki-connector-slack

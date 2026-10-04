@@ -1,6 +1,6 @@
 ---
 name: lisa-project-ideation
-description: "Generate practical, verifiable product ideas for the current host project FROM EVIDENCE-DERIVED PERSONAS, then turn the selected build-ready ideas into real PRDs via lisa-research. First derives the personas the project actually serves by mining its docs, code, data model, and releases (never invented — each persona cites its evidence), then ideates per persona. Every build-ready idea must pass a practicality gate (an obtainable data/source path) and an empirical verification gate (a user-observable outcome the agent can verify). Selected ideas are handed to lisa-research, which creates each PRD in the configured source (Notion / Confluence / GitHub / Linear) — in the draft state by default, or prd-ready (auto-picked-up by lisa-intake) when prd_ready=true. Defaults to creating one PRD (the top-ranked idea); max_prds widens the batch. Invoke for 'generate feature ideas for this project', 'what should we build next for <persona>?', 'looking at <external product>, what should we add here?'."
+description: "Generate practical, verifiable…"
 allowed-tools: ["Skill", "Bash", "Read", "Glob", "Grep", "WebFetch", "WebSearch"]
 ---
 
@@ -207,7 +207,10 @@ For each idea in the creation set, invoke `/lisa:research` with:
 - a structured `ideation_ledger_payload` handoff containing the selected marker, automation id and
   memory path when available, persona names, persona evidence references, rejected overlap
   candidates, repo identity, `prd_ready`, selected idea title/key, and the expected empirical
-  verification artifact. This payload is the only ideation-run metadata channel between
+  verification artifact. For a justified re-proposal, include `reproposal_context`: the dated
+  decline, dated new evidence reference, materially changed consequence, and the exact machine
+  token and human acknowledgment paragraph specified below. Research must include that paragraph
+  and token in the PRD body. This payload is the only ideation-run metadata channel between
   `project-ideation`, `research`, `prd-source-write`, and the vendor writer; keep GitHub-specific
   rendering out of this skill.
 
@@ -241,9 +244,24 @@ Each created PRD carries the marker `[lisa-project-ideation] idea=<stable-key>`.
 `<stable-key>` deterministically from: repo identity (configured repo or git remote + repo-root
 basename) + a normalized slug of the idea name + the normalized persona key(s) + the existing-fit
 anchor. **Do not** include rank, date, confidence, or the generated PRD title (they change across
-runs). `lisa-prd-source-write` searches the source for an open PRD carrying this marker before
+runs). `lisa-prd-source-write` searches the source for a PRD carrying this marker before
 creating — matching by marker, never by title — so re-running ideation updates/references the
 existing PRD rather than duplicating it.
+
+Per the `rejection-detection` rule's **Proposal rejection memory** section, that marker search MUST
+cover **open AND closed** PRDs (with a body-enumeration fallback on search-index lag), and a PRD
+**closed as _not planned_** (GitHub `stateReason == "not_planned"`; the config-resolved won't-do/
+canceled equivalent on JIRA/Linear — never a hardcoded lane string) is a **durable human decline**
+that **suppresses** re-proposing that idea. Re-propose only for a materially changed consequence, requirement, or risk addressing the decline, supported by evidence that **postdates the
+decline**, and state it in the new PRD as BOTH the machine token (`declined <date>; recurred <date>
+in <ref>`) and a human acknowledgment sentence (`You declined this on <date>. New evidence (<date>, <ref>) changes the consequence, requirement, or risk: <what changed and why the decline no longer applies>.`). A PRD closed as _completed_ is
+not a decline. This is tracker-side memory; the advisory ideation memory ledger stays advisory and
+never overrides it.
+
+Every created PRD MUST carry the `rejection-detection` **operator footer** as a visible prose line
+so the operator knows which close-reason silences it:
+
+> To stop this from being raised again, close it as **Not planned**. Close it as **Completed** if it was fixed — a later recurrence may be re-filed as a regression.
 
 ## Step 7 — Output (no report file)
 
@@ -275,6 +293,89 @@ Emit two distinct in-session sections (do not write a report file):
 Always include the **Personas**, **What Already Exists**, **Discovery Spikes**, and **Rejected**
 sections (even if empty) so the user sees what was considered and filtered out.
 
+## Run outcome
+
+As the registered `exploratory-prds` automation loop, this run conforms to the
+`automation-runbook-contract` rule: it ends in **exactly one** of the six run outcomes and records it,
+so a quiet ideation run and a broken one are never confused.
+
+| This run's exit path | Run outcome |
+|---|---|
+| PRD(s) created or reused this run (Step 6/7 **PRDs Created**) | `candidate-proposed` |
+| Nothing to ideate — no Practical Idea cleared the bar; nothing created — **or** every idea was suppressed by a prior decline (`rejection-detection` **Proposal rejection memory**): the summary MUST name the suppression count | `nothing-needed` |
+| The Step 5.5 **PRD-queue-pressure gate** blocked auto-ready creation — a human must drain the queue before another auto-ready PRD is added | `approval-requested` |
+| The loop itself could not run — the PRD source reader failed or the queue is misconfigured (a source-reader failure snapshot, not queue pressure) — **or** the open-and-closed rejection-memory marker search could not read the source: a memory check that could not run is a broken loop, never a silent `nothing-needed` | `recovery-required` |
+| The runbook's **Retirement condition** tripped — the trailing quiet window is empty AND this run proposed nothing AND no unresolved PRD pressure exists while no new surface has shipped — this row supersedes the `nothing-needed` row when it applies | `policy-obsolete` |
+| A degradation that still let ideation run (optional Codex automation memory unavailable, an inspiration source unreachable) | the outcome it actually reached above, with the summary **leading with the degradation** — degradation never mints a seventh token |
+
+The pressure gate is `approval-requested`, **not** `recovery-required`: the loop ran fine and
+correctly declined to add queue pressure — it is asking a human to drain the queue, not reporting a
+broken machine. `recovery-required` is reserved for the loop failing to run at all.
+
+Before invoking the run-record CLI, evaluate the **Retirement condition** first. If it applies,
+select `policy-obsolete` as the sole outcome and do not record a prior `nothing-needed` result;
+otherwise select the ordinary outcome from the table.
+
+Record **exactly one** outcome per invocation through the run-record CLI, naming this loop's runbook
+(the `--summary` is the operator-readable one-liner in the contract's exemplar voice — plain,
+specific, actionable, e.g. `Reviewed evidence; no practical idea cleared the bar — nothing to
+propose.` for `nothing-needed`; and for a `recovery-required` from an unreadable decline check,
+`Tracker unreachable during the decline check — restore credentials; nothing was filed this run.`):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT:-node_modules/@codyswann/lisa/plugins/lisa}/scripts/automation-run-record.mjs" \
+  --loop-id exploratory-prds --outcome candidate-proposed \
+  --summary "Created PRD #1810 for offline export; awaiting your flip to ready." \
+  --runbook .lisa/automations/exploratory-prds.runbook.md [--ref <prd-url>]...
+```
+
+The `:-` default in that command is load-bearing, not decoration. `CLAUDE_PLUGIN_ROOT` is **not
+exported into an agent's Bash tool environment**, so the bare `"${CLAUDE_PLUGIN_ROOT}/scripts/…"`
+form expands to an absolute `/scripts/…` and exits 1. The default names the installed package copy,
+which resolves from the **consumer repository root** — which is where the recorder is actually
+invoked. Never substitute a bare `plugins/lisa/scripts/…` or `plugins/src/base/scripts/…` path:
+those are relative to the **Lisa package root**, not the repository you are standing in, and exit 1
+from there. If recording still fails, **degrade, never abort** (per `automation-runbook-contract`):
+note the recording failure in the run output and finish the run — a recording failure is a
+degradation to report, never a reason to block the loop.
+
+**Retirement evaluation (every run).** Evaluate this loop's runbook **Retirement condition** on
+every run, exactly as the `automation-runbook-contract` rule's Retirement section defines it — this
+skill conforms to that text and never restates or diverges from it. On top of the contract's two
+conditions the runbook seeds a third **domain conjunct** — no unresolved PRD pressure exists and the
+project has shipped no new surface to ideate against — which only tightens the test and never
+replaces it: a quiet month because the queue was full is the loop working, not the loop being
+obsolete. Evaluate all three. When all three hold, record `policy-obsolete` and file **exactly ONE**
+marker-deduped teardown proposal through `lisa-tracker-write` (per `tracked-work` +
+`integration-access-layer`):
+
+- **Marker** `<!-- [lisa-automation-retire] key=exploratory-prds -->` plus a visible prose line;
+  matched on the marker, never the title; searched **open AND closed** per `rejection-detection`'s
+  **Proposal rejection memory**. Treat matches by close state: **open** suppresses another proposal;
+  **Not planned** suppresses another proposal unless new evidence postdates the rejection and materially changes the consequence, requirement, or risk that justified the decline;
+  **Completed** means the prior approved action happened, so a later recurrence may be re-filed.
+  When an existing proposal suppresses filing, **the run still records `policy-obsolete` and files
+  nothing** — the outcome describes this run, while the ticket is filed exactly once.
+- **Labels** `status:blocked` + `human-needed`, carrying the contract's decision-ready packet. The
+  `human-needed` label marks the proposal human-owned: `lisa-repair-intake` recognizes it and never
+  re-dispatches it as stalled work.
+- **Evidence** the date-filtered search result, this run's summary, **the loop's current cadence**
+  (the baseline an operator needs to choose a longer one), and a one-line summary of recent runs
+  read from `.lisa/automations/runs/exploratory-prds.jsonl`. Fill the rest of the packet the same
+  way every time: *Work already attempted* is the searches this run ran, and *Risk of inaction* is
+  that the loop keeps consuming schedule slots and tokens for nothing.
+- **How to answer** names the three operator responses: **approve** — run
+  `/lisa:tear-down-automations exploratory-prds` and only that loop registration goes away;
+  **decline** — close the proposal as
+  **Not planned** (closing it as **Completed** leaves a later re-file open) and the loop simply
+  continues; **re-cadence** — pick a longer cadence off that evidence and re-register with
+  `/lisa:setup-automations` instead of tearing down.
+- **Operator footer**, verbatim, as on every loop-filed proposal (`rejection-detection`):
+  > To stop this from being raised again, close it as **Not planned**. Close it as **Completed** if it was fixed — a later recurrence may be re-filed as a regression.
+
+The loop **keeps running at its normal cadence** until a human acts, and never deletes its own
+registration.
+
 ## Out of scope (hard rules)
 
 - **No fabricated personas.** No evidence citation → no persona; generic roles banned without
@@ -286,8 +387,9 @@ sections (even if empty) so the user sees what was considered and filtered out.
 - **Tests, lint, typecheck, and build are not the empirical verification plan** — they are
   prerequisites; verification must observe user-facing behavior.
 - **Do not create tracker tickets or mutate the host project's code.** PRD creation (via
-  `lisa-research`) is the only write this skill performs; ticket planning (`lisa-plan`) and
-  implementation (`lisa-implement`) are separate, user-invoked flows.
+  `lisa-research`) is the only normal write this skill performs; the only tracker-ticket exception is
+  the exactly-one marker-deduped `policy-obsolete` teardown proposal described above. Ticket planning
+  (`lisa-plan`) and implementation (`lisa-implement`) are separate, user-invoked flows.
 - **Do not write PRDs to the source directly** — always go through `lisa-research` →
   `lisa-prd-source-write` so the source stays switchable.
 - **Do not add a new verification/browser-automation framework** when one already exists — reuse it.

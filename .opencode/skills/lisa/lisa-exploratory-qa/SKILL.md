@@ -1,13 +1,15 @@
 ---
 name: lisa-exploratory-qa
-description: First-time-user exploratory QA pass for ANY product type (DOM web app, HTTP/API backend, canvas game, CLI/library, IaC/CDK) that FEEDS THE LIFECYCLE. Use when asked to experience a product the way a brand-new end user would — driving its real consumer-facing interface via the `use-the-product` core (which detects the product type, resolves the per-environment mutation policy from .lisa.config.json so production data is never mutated by accident, and explores through the project's personas when it defines them) to find anything confusing, broken, or hard to use. Static route scans, HTTP fetches, screenshots alone, or console/network checks alone are not sufficient evidence. Instead of writing a report file, it files every finding as a tracked work item via lisa-tracker-write. A `ready` parameter controls whether those tickets are created build-ready (auto-picked-up by lisa-intake) or left in the backlog for human triage (default). For gaps in the automated test suite, use e2e-coverage-gaps instead.
+description: "First-time-user exploratory QA…"
 ---
 
 # Exploratory QA
 
+On runtimes without the rule tree (Antigravity), read **Worth doing** in `lisa-track` for the same value and decline policy.
+
 ## Overview
 
-Experience the product the way a **brand-new end user** would: drive its real consumer-facing interface and actually try to use it, then surface anything **confusing, broken, or hard to understand**. This is a usability/experience pass, **not** a test-coverage audit (for that, use `e2e-coverage-gaps`). Every finding is filed as a tracked work item so it enters the Lisa lifecycle — no static report file.
+Experience the product the way a **brand-new end user** would: drive its real consumer-facing interface and actually try to use it, then surface anything **confusing, broken, or hard to understand**. This is a usability/experience pass, **not** a test-coverage audit (for that, use `e2e-coverage-gaps`). Accepted worthwhile findings enter the Lisa lifecycle as bounded tracked work — no static report file.
 
 **How you drive the product is owned by the `use-the-product` core skill.** Invoke it first: it detects the product type (web / API / game / CLI / IaC), resolves the target environment and its **mutation policy** (so you never mutate production without an explicit, justified opt-in), and discovers the project's **personas** so you can explore as each one. This skill supplies the **QA lens** — what to look for and how to file it.
 
@@ -21,6 +23,7 @@ Experience the product the way a **brand-new end user** would: drive its real co
 ## 1. Set up
 
 - **Invoke `use-the-product`** to detect the product type, resolve the environment + mutation policy, and discover personas/subagents. Everything about *how* to drive the product, *where*, and *how much you may mutate* comes from there — do not re-derive it.
+- For a DOM web app whose resolved non-production environment has mutation policy `full`, check the optional Kane provider with `lisa kane probe`. If ready, invoke `lisa-kane-browser` for self-contained journeys and use its screenshots, HAR/network, console, and normalized verdict as evidence. Keep the run on a directly controlled browser for `read-only`/`forbidden` environments. Treat `tool_failed`/`timed_out` as provider findings, never as product bugs.
 - **Confirm the tracker is configured.** Findings are filed as tickets, so read `tracker` from `.lisa.config.json` (local overrides global). If unset, stop and report that the tracker must be configured (`/lisa:setup:jira` / `:github` / `:linear`) before exploratory QA can file findings — do not silently fall back to a report file.
 - Read the `ready` flag (default `false`).
 
@@ -60,18 +63,34 @@ Whether you may create/edit/delete — and as which account — is set by the `u
 
 ## 6. File findings as tracked work
 
-No report file. Every finding becomes a **leaf work item** via `lisa-tracker-write` (the vendor-neutral writer — it dispatches to the configured tracker and runs the validation gate; never call a vendor `*-write-*` skill directly):
+Apply `do-it-now`'s **Worth doing** guidance first. Decline low-value observations in the run summary without a ticket or human gate; bundle related worthwhile minor findings when appropriate. No report file. Every accepted finding becomes a **leaf work item** via `lisa-tracker-write` (the vendor-neutral writer — it dispatches to the configured tracker and runs the validation gate; never call a vendor `*-write-*` skill directly):
+
+Kane never files the work item itself. Even when it marks a failure as a confirmed product bug, run Lisa's marker-based duplicate search, apply the QA lens, and route the finding through `lisa-tracker-write` exactly as for every other controller.
 
 | Finding | `issue_type` | `build_ready` |
 |---|---|---|
 | User-visible **bug** (broken behavior) | `Bug` | the `ready` flag (default `false`) |
 | **Usability / UX / clarity issue** | `Improvement` | the `ready` flag (default `false`) |
 
-Each finding is a flat leaf, so `build_ready` applies directly — pass it explicitly on every create. Each ticket MUST be a complete spec (the validator rejects thin tickets): a **three-audience description**; for a **bug**, exact reproduction steps, observed-vs-expected, the env / account / interface it occurred at, and evidence; for a **usability issue**, the observed friction, who it affects, **where**, and the proposed improvement; and **Gherkin acceptance criteria** for the fixed behavior.
+Each finding is a flat leaf, so `build_ready` applies directly — pass it explicitly on every create.
+
+**This skill is the named human-gate exception under `ready-role-filing`.** For accepted worthwhile work elsewhere in Lisa, a complete defect found during other work is filed with explicit `build_ready: true` so build-intake claims it next cycle. Exploratory QA is deliberately different, and that difference is ratified rather than drift: its findings are *candidate* defects and usability observations whose **product significance is a human call**, so auto-readying them would push judgment work into the build queue — precisely the failure the gate model exists to prevent. Its default `ready=false` is therefore an **explicit human-gate marker, never a bare omission**: every not-ready create passes `human_gate: "exploratory finding — product significance is a human product call"` alongside `build_ready: false`, and the writer stamps the auditable `[lisa-human-gate]` marker. An operator who wants a pass to feed the queue directly opts in with `ready=true`.
+
+(The sibling `e2e-coverage-gaps` skills are the contrast: a missing automated test is not a product question, so they file `build_ready: true` by default.)
+
+Each ticket MUST be a complete spec (the validator rejects thin tickets): a **three-audience description**; for a **bug**, exact reproduction steps, observed-vs-expected, the env / account / interface it occurred at, and evidence; for a **usability issue**, the observed friction, who it affects, **where**, and the proposed improvement; and **Gherkin acceptance criteria** for the fixed behavior.
 
 ### Idempotency — don't spam duplicates
 
-Re-running a pass must not refile the same finding. Before creating a ticket, search the tracker for an **open** ticket carrying a stable marker `[lisa-exploratory-qa] <finding-key>` in its body (the `<finding-key>` is a stable slug of surface + symptom, e.g. `settings-modal/horizontal-overflow@tablet`). If one exists, reference/update it instead; only create when none exists. **Match by the marker, never by title.** A *closed* prior ticket does not suppress a new one — a recurrence after a fix is a genuine regression.
+Re-running a pass must not refile the same finding. Before creating a ticket, search the tracker for a ticket carrying a stable marker `[lisa-exploratory-qa] <finding-key>` in its body (the `<finding-key>` is a stable slug of surface + symptom, e.g. `settings-modal/horizontal-overflow@tablet`). Per the `rejection-detection` rule's **Proposal rejection memory** section, that marker search MUST cover **open AND closed** tickets (with a body-enumeration fallback on search-index lag), and **match by the marker, never by title alone; for legacy unmarked issues, read the body and closing discussion to establish the semantic match.** Then split on how any prior ticket closed:
+
+- **Open** ticket carrying the marker → reference/update it instead; do not create a second.
+- **Closed as _completed_** → does **not** suppress. A recurrence after a fix is a genuine **regression**, so file the finding.
+- **Closed as _not planned_** (GitHub `stateReason == "not_planned"`; the config-resolved won't-do/canceled equivalent on JIRA/Linear — never infer decline from a hardcoded state name) → a human **declined** this finding, so **suppress it**. Re-file only with evidence that **postdates the decline** and establishes a materially changed consequence, requirement, or risk addressing the recorded reason, carrying BOTH the machine token (`declined <date>; recurred <date> in <ref>`) and a human acknowledgment sentence (`You declined this on <date>. New evidence (<date>, <ref>) changes the consequence, requirement, or risk: <what changed and why the decline no longer applies>.`).
+
+Every filed finding ticket MUST end with the `rejection-detection` **operator footer** as a visible prose line so the operator knows which close-reason silences it:
+
+> To stop this from being raised again, close it as **Not planned**. Close it as **Completed** if it was fixed — a later recurrence may be re-filed as a regression.
 
 ## Output
 
@@ -81,6 +100,81 @@ No report file. Emit a concise in-session summary:
 - **First impression:** could a new user tell what the product is and what to do first?
 - **Findings filed**, bucketed by type — each with its **created or referenced ticket ref** and **build-ready state**.
 - **Observed but not filed:** anything noticed but intentionally not ticketed (including forbidden-mutation blocks), with why.
+
+## Run outcome
+
+As the registered `exploratory-bugs` automation loop, this pass conforms to the
+`automation-runbook-contract` rule: every invocation ends in **exactly one** of the six run outcomes
+and records it, so a quiet run and a broken run are never mistaken for each other.
+
+| This cycle's exit path | Run outcome |
+|---|---|
+| Findings filed — one or more `Bug` / `Improvement` tickets created or referenced (§6) | `candidate-proposed` |
+| Clean pass — explored the personas and surfaces, nothing worth filing — **or** every candidate was suppressed by a prior decline (`rejection-detection` **Proposal rejection memory**): the summary MUST name the suppression count | `nothing-needed` |
+| Tracker unconfigured — the §1 stop path; findings cannot be filed — **or** the open-and-closed rejection-memory marker search could not run (tracker unreachable / credentials revoked): a memory check that could not run is a broken loop, never a silent `nothing-needed` | `recovery-required` |
+| The runbook's **Retirement condition** tripped — the trailing quiet window is empty AND this pass found nothing to file AND the project no longer ships an exploratory-qa surface — this row supersedes the `nothing-needed` row when it applies | `policy-obsolete` |
+| A degradation that still let the pass explore (e.g. Kane unavailable, one persona unreachable) | the outcome it actually reached above, with the summary **leading with the degradation** — degradation never mints a seventh token |
+
+Before invoking the run-record CLI, evaluate the **Retirement condition** first. If it applies,
+select `policy-obsolete` as the sole outcome and do not record a prior `nothing-needed` result;
+otherwise select the ordinary outcome from the table.
+
+Record **exactly one** outcome per invocation through the run-record CLI, naming this loop's runbook
+(the `--summary` is the operator-readable one-liner in the contract's exemplar voice — plain,
+specific, actionable, e.g. `Explored 4 personas; nothing confusing to file.` — or, when a decline suppressed the only candidates, `Explored 4 personas; 2 candidates suppressed by a prior decline — nothing new to propose.` — for `nothing-needed`; and for a `recovery-required` from an unreadable decline check, `Tracker unreachable during the decline check — restore credentials; nothing was filed this run.`):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT:-node_modules/@codyswann/lisa/plugins/lisa}/scripts/automation-run-record.mjs" \
+  --loop-id exploratory-bugs --outcome candidate-proposed \
+  --summary "Explored 4 personas; filed 3 findings from the checkout flow — awaiting your flip to ready." \
+  --runbook .lisa/automations/exploratory-bugs.runbook.md [--ref <ticket-url>]...
+```
+
+The `:-` default in that command is load-bearing, not decoration. `CLAUDE_PLUGIN_ROOT` is **not
+exported into an agent's Bash tool environment**, so the bare `"${CLAUDE_PLUGIN_ROOT}/scripts/…"`
+form expands to an absolute `/scripts/…` and exits 1. The default names the installed package copy,
+which resolves from the **consumer repository root** — which is where the recorder is actually
+invoked. Never substitute a bare `plugins/lisa/scripts/…` or `plugins/src/base/scripts/…` path:
+those are relative to the **Lisa package root**, not the repository you are standing in, and exit 1
+from there. If recording still fails, **degrade, never abort** (per `automation-runbook-contract`):
+note the recording failure in the run output and finish the cycle — a recording failure is a
+degradation to report, never a reason to block the loop.
+
+**Retirement evaluation (every run).** Evaluate this loop's runbook **Retirement condition** on
+every run, exactly as the `automation-runbook-contract` rule's Retirement section defines it — this
+skill conforms to that text and never restates or diverges from it. On top of the contract's two
+conditions the runbook seeds a third **domain conjunct** — the project no longer ships an
+exploratory-qa command surface to explore — which only tightens the test and never replaces it: a
+quiet month on a product nobody broke is quality holding, not a reason to stop looking. Evaluate all
+three. When all three hold, record `policy-obsolete` and file **exactly ONE** marker-deduped
+teardown proposal through `lisa-tracker-write` (per `tracked-work` + `integration-access-layer`):
+
+- **Marker** `<!-- [lisa-automation-retire] key=exploratory-bugs -->` plus a visible prose line;
+  matched on the marker, never the title; searched **open AND closed** per `rejection-detection`'s
+  **Proposal rejection memory**. Treat matches by close state: **open** suppresses another proposal;
+  **Not planned** suppresses another proposal unless new evidence postdates the rejection and materially changes the consequence, requirement, or risk that justified the decline;
+  **Completed** means the prior approved action happened, so a later recurrence may be re-filed.
+  When an existing proposal suppresses filing, **the run still records `policy-obsolete` and files
+  nothing** — the outcome describes this run, while the ticket is filed exactly once.
+- **Labels** `status:blocked` + `human-needed`, carrying the contract's decision-ready packet. The
+  `human-needed` label marks the proposal human-owned: `lisa-repair-intake` recognizes it and never
+  re-dispatches it as stalled work.
+- **Evidence** the date-filtered search result, this run's summary, **the loop's current cadence**
+  (the baseline an operator needs to choose a longer one), and a one-line summary of recent runs
+  read from `.lisa/automations/runs/exploratory-bugs.jsonl`. Fill the rest of the packet the same
+  way every time: *Work already attempted* is the searches this run ran, and *Risk of inaction* is
+  that the loop keeps consuming schedule slots and tokens for nothing.
+- **How to answer** names the three operator responses: **approve** — run
+  `/lisa:tear-down-automations exploratory-bugs` and only that loop registration goes away;
+  **decline** — close the proposal as
+  **Not planned** (closing it as **Completed** leaves a later re-file open) and the loop simply
+  continues; **re-cadence** — pick a longer cadence off that evidence and re-register with
+  `/lisa:setup-automations` instead of tearing down.
+- **Operator footer**, verbatim, as on every loop-filed proposal (`rejection-detection`):
+  > To stop this from being raised again, close it as **Not planned**. Close it as **Completed** if it was fixed — a later recurrence may be re-filed as a regression.
+
+The loop **keeps running at its normal cadence** until a human acts, and never deletes its own
+registration.
 
 ## Quality bar
 

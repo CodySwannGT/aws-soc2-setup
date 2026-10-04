@@ -1,11 +1,11 @@
 ---
 name: lisa-query
-description: "Answer a question from the LLM Wiki with citations. Reads the index, drills into relevant pages, and synthesizes a cited answer. Read-only by default; files new synthesis back only when explicitly asked."
+description: "Answer a question from the LLM…"
 ---
 ## Lisa Command Compatibility
 
 - Original Claude command: `/lisa:query`
-- OpenCode invocation: `$lisa-query` or a plain-English request that matches this skill.
+- Codex invocation: `$lisa-query` or a plain-English request that matches this skill.
 - Treat the user's surrounding request as the command arguments.
 - Claude argument hint: `<question>`
 

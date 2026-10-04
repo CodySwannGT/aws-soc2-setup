@@ -1,3 +1,6 @@
+<!-- This file is managed by Lisa and IS replaced on each `lisa` run. -->
+<!-- Do not edit directly — durable changes belong upstream in Lisa. -->
+
 # GitHub Actions Configuration
 
 This directory contains the CI/CD workflows and automation for the project. This document explains how to configure and use the GitHub Actions workflows.
@@ -42,6 +45,8 @@ For full functionality, configure the following secrets:
 |--------|---------|--------------|
 | `EXPO_TOKEN` | EAS builds and updates | Mobile deployment |
 | `SENTRY_AUTH_TOKEN` | Error tracking | Release monitoring |
+| `SENTRY_ORG` | Sentry organization slug | Release monitoring |
+| `SENTRY_PROJECT` | Sentry project slug | Release monitoring |
 | `SONAR_TOKEN` | Code quality analysis | Security scanning |
 | `SNYK_TOKEN` | Vulnerability scanning | Security scanning |
 
@@ -63,7 +68,7 @@ Runs on every pull request to validate code quality:
 **Configuration**:
 ```yaml
 # In ci.yml, modify these inputs:
-node_version: '22.21.1'
+node_version: '22.23.3'
 package_manager: 'bun'
 skip_jobs: 'test,test:integration,test:e2e'  # Comma-separated list
 ```
@@ -131,7 +136,12 @@ The pause is enforced by the GitHub Environment named in `approval_environment`
 (falls back to `environment`, i.e. the branch name):
 
 ```yaml
-uses: CodySwannGT/lisa/.github/workflows/release.yml@main
+# The ref is maintained for you. Lisa rewrites every `uses:` pointing at one of
+# its reusable workflows to the commit your installed version's tag names, on
+# every apply, with the version alongside it as a comment. Do not hand-edit it:
+# a hand-pinned SHA rots, and `@main` would run whatever landed on Lisa's
+# default branch since your run started rather than the Lisa you installed.
+uses: CodySwannGT/lisa/.github/workflows/release.yml@<40-character commit sha> # v<x.y.z>
 with:
   require_approval: true
   approval_environment: 'production'
@@ -302,19 +312,6 @@ This workflow is read-only — it does not modify code or create PRs. It only re
    | `JIRA_PROJECT_KEY` | Jira project key for ticket queries | `PROJ` |
 
 3. The workflow auto-enables once all three variables and both secrets are set. No feature flag needed.
-
-### Auto-update PR Branches (`auto-update-pr-branches.yml`)
-
-**Triggers**: Push to `main`, `staging`, or `dev`
-
-Automatically updates all open pull requests targeting the pushed branch by merging the latest base branch changes into PR branches. Uses [`chinthakagodawita/autoupdate`](https://github.com/chinthakagodawita/autoupdate) (v1.7.0).
-
-- Updates all open PRs (including drafts) targeting the updated branch
-- Skips PRs with merge conflicts (does not fail the workflow)
-- Retries up to 5 times on transient failures
-- No additional secrets required (uses `GITHUB_TOKEN`)
-
-**Note**: The merge commit will be attributed to `github-actions[bot]`. To attribute it to a specific user, add a PAT as a repository secret and update the workflow.
 
 ### Load Testing (`load-test.yml`)
 
@@ -545,8 +542,6 @@ Variables are non-sensitive configuration values. Set them in **Settings** > **S
 | `JIRA_BASE_URL` | Jira instance base URL (enables Jira triage workflow) | `https://company.atlassian.net` |
 | `JIRA_USER_EMAIL` | Email associated with the Jira API token | `user@company.com` |
 | `JIRA_PROJECT_KEY` | Jira project key for ticket queries | `PROJ` |
-| `SENTRY_ORG` | Sentry organization slug | `my-company` |
-| `SENTRY_PROJECT` | Sentry project slug | `frontend-app` |
 
 ## External Service Setup
 
@@ -601,22 +596,21 @@ Enable compliance validation:
 uses: ./.github/workflows/quality.yml
 with:
   compliance_framework: 'soc2'  # or iso27001, hipaa, pci-dss
-  require_approval: true
-  approval_environment: 'production'
 ```
 
-**Note**: Create the environment in **Settings** > **Environments** first (or
-declare it under `github.environments` in `.lisa.config.json` and run
-`/lisa:setup:github-repo`). Unlike release.yml's environment-enforced gate,
-quality.yml's `approval_gate` job only records an audit artifact — it does not
-pause the run. For an enforced human gate, use release.yml's `require_approval`.
+**Note**: quality.yml's `approval_gate` job only records an audit artifact; it
+does not pause the run. Do not pass `require_approval` or `approval_environment`
+to this quality.yml example. For an enforced human gate, pass those inputs to
+release.yml and create the environment in **Settings** > **Environments** first
+(or declare it under `github.environments` in `.lisa.config.json` and run
+`/lisa:setup:github-repo`).
 
 ### Custom Node Version
 
 ```yaml
 uses: ./.github/workflows/quality.yml
 with:
-  node_version: '22.21.1'
+  node_version: '22.23.3'
   package_manager: 'bun'  # or npm, yarn
 ```
 
@@ -649,14 +643,12 @@ with:
 │   ├── claude-nightly-test-improvement.yml     # Nightly test quality
 │   ├── claude-nightly-test-coverage.yml        # Nightly test coverage
 │   ├── claude-nightly-code-complexity.yml      # Nightly code complexity
-│   ├── auto-update-pr-branches.yml            # Auto-update PRs from base
 │   └── .env.example                            # Secrets template
-├── k6/
-│   ├── scripts/                            # Test scripts
-│   ├── scenarios/                          # Test configurations
-│   ├── thresholds/                         # Performance thresholds
-│   └── README.md                           # K6 documentation
-└── dependabot.yml                          # Dependency updates
+└── k6/
+    ├── scripts/                            # Test scripts
+    ├── scenarios/                          # Test configurations
+    ├── thresholds/                         # Performance thresholds
+    └── README.md                           # K6 documentation
 ```
 
 ## Troubleshooting

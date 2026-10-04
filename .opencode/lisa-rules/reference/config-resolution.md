@@ -2,6 +2,103 @@
 
 Lisa is vendor-agnostic. PRDs can be sourced from Notion, Confluence, Linear, GitHub Issues, or JIRA. Tickets can be written to JIRA, GitHub Issues, or Linear. Per-project configuration lives in `.lisa.config.json` at the repo root, with optional `.lisa.config.local.json` overriding on a per-key basis.
 
+
+> The sections between here and the horizontal rule were demoted out of the
+> always-on eager head by CodySwannGT/lisa#3992, verbatim. They are tracker-write
+> and provider mechanics: needed when a flow writes to a tracker or resolves a
+> deploy target, not on every session. The eager head keeps the resolution
+> pointer, the Atlassian identity switch, tracker selection, and repo identity.
+
+## Tracker status vocabulary
+
+**A status transition may target only a status named in the project's configured workflow map** (`jira.workflow.*` for JIRA; the equivalent label/state map for GitHub and Linear). The configured map is the COMPLETE authorized vocabulary — not a starting point.
+
+- **Never adopt statuses discovered from the tracker's live workflow metadata** — transition lists (`getTransitionsForJiraIssue` targets), board columns, status descriptions, or statuses seen on other tickets. A tracker workflow usually contains more statuses than the config names; those extra statuses are not lisa's to use. The live workflow is consulted only to find the transition *id* that reaches a config-named status.
+- **A lifecycle stage with no configured status gets no transition.** If the flow reaches a stage the map does not name (e.g. "PR open awaiting review" when `jira.workflow.review` is unset, or a QA-ready stage with no `qa` mapping), leave the status where it is and record the stage in a comment. Do not pick the nearest-sounding tracker status.
+- **This binds every actor that writes to the tracker** — the lead as much as any subagent. In runtimes where interactively-authenticated MCPs are lead-only, the lead performs the tracker writes for the whole flow; loading an implement/sync skill without the agent definition does not relax this rule.
+
+This is the shared slug for the config-bound-transitions policy (the `leaf-only-lifecycle` precedent: one slug, never divergent per-surface prose). Skills and agent definitions cite it rather than restating it.
+
+## Project rules and learnings
+
+Host-authored project rules live in the fixed, agent-neutral directory
+`.agents/rules/` — not a configurable file. Every agent reaches it through the
+Lisa-managed pointer block in `AGENTS.md`, so it is read once, on demand. A
+project that still carries the retired `.claude/rules/PROJECT_RULES.md` keeps
+it, untouched and authoritative; the pointer names it too. Automated
+learnings never append to host rules: they use the separate machine-managed
+ledger resolved from `.lisa.config.json` — the optional `learnings.file`
+override, else the default `.lisa/PROJECT_LEARNINGS.md`. The ledger lives in the
+cold `.lisa/` tree (never an auto-loaded rules directory) and is consumed only
+through the contract's bounded projection, never read raw wholesale. Both
+writers and budget checks import the executable contract from
+`@codyswann/lisa/learnings`; they must not copy its numeric limits.
+
+## Optional Kane browser provider
+
+Kane is selected only through `verification.browser.kane`: require `enabled: true`, exact version
+`0.6.3`, `cloudUploadApproved: true`, an explicit non-production `allowedEnvironments` entry, a
+Test Manager `projectId`, and a resolved `exploration` mutation policy of `full`. Credentials never
+live in Lisa config. Run `lisa kane probe` before use and invoke only through `lisa-kane-browser`;
+provider/auth/upload/schema failures are tooling failures, not product failures. Kane supplies
+empirical evidence only—native Playwright/Cypress/Maestro remains the regression authority.
+
+## Env → base branch
+
+The `## Target Backend Environment` grammar is durable: human-confirmed values
+are a bare configured key or `Confirmed: <env>`; automation writes either
+`Inferred: <env> — evidence: <title|body|reproduction|hostname>` or
+`Assumption: <env> — remote default branch <branch>`. When no unique environment
+maps to the default branch, use `Assumption: remote default branch <branch>`.
+Human confirmation replaces an automated annotation with a bare key or
+`Confirmed: <env>`. For legacy bare values, use managed draft markers and current
+ticket content only; provider edit history is not required. A marker proves
+automation and requires re-annotation; otherwise unknown provenance with
+conflicting evidence stops for confirmation.
+
+Resolution order is human-confirmed value; validated `Inferred:` evidence; then
+one unambiguous signal from the human-authored title, body, and reproduction
+steps or a URL hostname. Exclude the complete `Target Backend Environment`
+section and other machine-authored metadata/draft blocks from the scan so an
+annotation cannot validate or conflict with itself. Evidence supersedes only an
+`Assumption:`. A signal must be an exact
+`deploy.branches` key as a complete token/hostname label. The sole normalization
+is `prod` ↔ `production` when exactly one is configured; no other aliases exist.
+Conflicting signals stop. Never infer from arbitrary branch text, URL paths or
+query strings, or substrings. With no signals, use the remote default branch and
+record an assumption: include `<env>` only for a unique reverse-map, otherwise
+use the branch-only form without inventing an environment or blocking. Require
+any selected environment mapping and its remote branch to exist.
+A non-integration environment bug is fixed, merged, and verified on that
+environment branch first, then
+forward cherry-picked down to the integration branch via a linked follow-up.
+
+## Env-keyed `done` — promotion completeness
+
+A merged PR's base branch names the environment a change **entered**, never the environments it has
+**reached**. Before writing an env-keyed `done`, walk `deploy.order` from its lowest rung and write
+the highest **contiguously reached** rung at or below the resolved env. A rung is reached only when
+the merge commit is an ancestor of its `deploy.branches` branch
+(`git merge-base --is-ancestor <merge-sha> origin/<branch>`, asserted for **every** env branch at or
+below the resolved one, not only the PR's base) **and** that branch's most recent deploy
+**concluded `success`** — read the `conclusion`, never the `status`, because an in-flight deploy has
+a null conclusion and looks identical to a pass. Only a concluded `success` promotes: a null
+conclusion and every other conclusion (`failure`, `cancelled`, `timed_out`, `neutral`, `skipped`,
+`stale`, `action_required`) leave the rung unreached. Where `deploy.order` is absent the ladder is
+the single resolved env; where a branch exposes no deploy surface at all, ancestry alone decides
+that rung.
+
+A hotfix straight to `main` that skipped `staging` therefore resolves to the rung below the gap and
+stays open; the terminal value, and provider-native closure with it, is earned only by a
+promotion-complete merge. The recorded reason always carries all three fields —
+`<first unreached env> (<its branch>) — <condition>`, where the condition is `missing ancestry`,
+`deploy unknown: <run URL or "no concluded run">`, or `deploy concluded <conclusion>: <run URL>`. A
+failing run named without its environment and branch is an incomplete reason. An open back-fill PR
+against a skipped environment branch is outstanding delivery, not branch hygiene.
+
+
+---
+
 This rule is the single source of truth for the `.lisa.config.json` schema, the resolution algorithm, and the dispatch tables every vendor-neutral skill follows.
 
 ## File location and precedence
@@ -163,10 +260,10 @@ fi
     "gapTiers": "core",
     "backoffHours": 24,
     "thresholds": {
-      "sentryMinEvents24h": 10,
+      "minEvents24h": 1,
       "errorRateSpikeMultiplier": 2,
       "p95LatencyMs": 1000,
-      "xrayFaultRatePct": 5
+      "faultRatePct": 5
     }
   }
 }
@@ -178,8 +275,20 @@ fi
 |-------|----------|---------|-------|
 | `tracker` | **yes** | — | Destination for ticket writes. One of `"jira"`, `"github"`, `"linear"`. Missing → fail with instruction to run the matching `/lisa:setup:*` skill. |
 | `source` | no | — | Default PRD source for batch skills (`/lisa:intake`) and arg-less single-PRD skills. One of `"notion"`, `"confluence"`, `"linear"`, `"github"`, `"jira"`. Explicit URLs/keys passed to a skill always win over `source`; this is a default, not a lock. |
+| ~~`projectRulesFile`~~ | — | — | **Retired.** Host-authored rules now live in the fixed, agent-neutral directory `.agents/rules/` — not a configurable file. An existing key is still parsed and preserved so installed projects keep applying, but nothing serves rules from it. See **Host rules** below. |
+| `learnings.file` | no | `.lisa/PROJECT_LEARNINGS.md` | Safe repo-relative Markdown path for the machine-managed learnings ledger, overriding the `.lisa/` default. Rejected if it resolves inside any auto-loaded rules tree (`.claude/rules`, `.cursor/rules`, `.github/instructions`, `.agents/rules`) — the ledger must stay out of eager context. |
+| `health.schedule` | no | `off` | Health cadence contract: `off`, `daily`, or `weekly`. `lisa sync` populates the default with `_lisaSync.populated` provenance and rejects values outside this closed vocabulary. Runtime results live only at the gitignored `.lisa/health/latest.json`, never in either config file. |
 | `usage` | no | — | Optional token/cost pricing metadata consumed by the `usage-accounting` rule. Missing pricing never blocks a lifecycle flow; Lisa records token counts with `estimated_cost: null` when no trustworthy price source is configured. |
 | `wiki` | no | — | Wiki location for the `wiki-knowledge-source` rule. Omit for a local in-repo wiki (`wiki/`). See **Wiki source** below. |
+
+### Host rules (`.agents/rules/`)
+
+Host-authored operating rules live in `.agents/rules/` — **fixed, not configurable**. One directory, every agent.
+
+- **Not a native auto-load tree.** `.claude/rules`, `.cursor/rules`, and `.github/instructions` are; `.agents/rules` deliberately is not. Every agent reaches it through the single Lisa-managed pointer block in `AGENTS.md` (Claude via the `@AGENTS.md` import in `CLAUDE.md`), so no agent loads host rules twice.
+- **Host-owned.** Lisa's installer never overwrites host rule bodies. Agents may make specific operator-requested edits directly, without recapturing the approved decision as a learning or promotion ticket; see **Operator-directed standing rules** in `project-learnings.md`. Lisa's own rules arrive through its plugins.
+- **Not the learnings ledger.** `.agents/rules` is reserved in the auto-loaded-tree blocklist, so a `learnings.file` override can never resolve inside it.
+- **Transition.** A project that still has the retired `.claude/rules/PROJECT_RULES.md` keeps it, untouched and authoritative. The pointer block names it so agents whose runtime does not auto-load `.claude/rules/` still find it. Moving that content is a human-gated decision, never an automated rewrite.
 
 ### Wiki source (`wiki`)
 
@@ -214,23 +323,47 @@ Declares **where this repo's LLM Wiki lives** so the query/ingest skills can res
 
 ### Env → base branch
 
-Implementation flows resolve their PR base from the work item's
-`## Target Backend Environment` in the forward direction of `deploy.branches`.
+Implementation flows resolve their PR base from the work item's environment
+evidence in the forward direction of `deploy.branches`.
 For example, `{ "staging": "staging", "production": "main" }` means a staging
 work item starts from `origin/staging` and opens its PR against `staging`. This
 is the reverse/inverse of the env-keyed `done` inference that derives an
 environment from a merged PR's base branch.
 
-For bug work, the reported environment is authoritative. `pre-flight-autofill`
-must parse environment mentions from the description/body and reproduction
-steps, including bare names (`dev`, `staging`, `prod`, `production`) and
-environment-bearing URLs (`staging.<domain>`, `gql.staging.*`,
-`dev.<domain>`). A parsed reported environment wins over any generic autofill
-default. If no environment is named anywhere, the flow may fall back to the
-remote default branch and record that assumption on the work item.
+The field grammar records provenance durably: human-confirmed values are a bare
+configured key or `Confirmed: <env>`; automated evidence is
+`Inferred: <env> — evidence: <title|body|reproduction|hostname>`; an automated
+fallback is `Assumption: <env> — remote default branch <branch>`. Human
+fallback without a unique reverse-map is
+`Assumption: remote default branch <branch>`. Human
+confirmation replaces an automated annotation with a bare key or
+`Confirmed: <env>`.
 
-If the reported environment is not present in `deploy.branches`, stop and report
-the missing mapping. Do not silently default to the integration branch.
+For legacy bare values created before this grammar, use managed draft markers
+and current ticket content only; provider edit history is neither required nor
+assumed. A managed marker proves automation and requires rewriting to
+`Inferred:` or `Assumption:`. Without one, provenance remains unknown, so the
+bare value is usable only if no conflicting evidence exists; a conflict stops
+for confirmation.
+
+Resolve it in this order: human-confirmed wins; validated `Inferred:` evidence
+is next; otherwise accept one unambiguous exact `deploy.branches` key from the
+human-authored title, body, and reproduction steps or a URL hostname. Exclude
+the entire `Target Backend Environment` section and all other machine-authored
+metadata/draft blocks from the evidence scan, so annotations never validate or
+conflict with themselves. Evidence supersedes only
+an `Assumption:`. Treat the reported bug environment as an example of this
+all-work-type evidence rule, not a special case. Normalize only built-in
+`prod` ↔ `production` when exactly one is configured; no other aliases exist.
+Never infer from arbitrary branch text, URL paths/query strings, or substrings.
+Multiple conflicting signals stop. With no signals, use the remote default
+branch and record an assumption: include the environment only for a unique
+reverse-map; otherwise use the branch-only form without inventing an environment
+or blocking solely on the reverse-map.
+
+Every selected environment must have a unique `deploy.branches` mapping and its
+mapped branch must exist on the remote. If either validation fails, stop and
+report it. Do not silently default to the integration branch.
 
 For non-integration environment bugs, definition of done is two-step:
 
@@ -248,7 +381,7 @@ Each vendor section is **conditionally required**: required only when that vendo
 | Field | Required when | Where it lives | Notes |
 |-------|---------------|----------------|-------|
 | `atlassian.cloudId` | `tracker = "jira"`, `source = "jira"`, `source = "confluence"`, or any `confluence-*` / `jira-*` skill is invoked | **committed** (`.lisa.config.json`) | Atlassian Cloud site UUID. Same for every developer on the project. Resolve once via `curl https://<site>/_edge/tenant_info` or `getAccessibleAtlassianResources`. Shared between JIRA and Confluence (same Atlassian site). |
-| `atlassian.site` | same as above | **committed** | Human-readable site URL (e.g. `propswap.atlassian.net`). Same for every developer. |
+| `atlassian.site` | same as above | **committed** | Human-readable site URL (e.g. `acme.atlassian.net`). Same for every developer. |
 | `atlassian.email` | when the developer's machine has multiple Atlassian accounts that can access the configured site | **local** (`.lisa.config.local.json`) | Per-developer. `--site` alone cannot disambiguate which acli profile to switch to when two accounts both have access to the same site (e.g., a personal account and a work account both invited to a customer's site). The setup skill writes this to the local override file, NEVER the committed file. |
 
 #### `jira`
@@ -270,12 +403,26 @@ Each vendor section is **conditionally required**: required only when that vendo
 |-------|---------------|-------|
 | `github.org` | `tracker = "github"` or `source = "github"` or any `github-*` skill is invoked | GitHub organization or user name. |
 | `github.repo` | same as above | GitHub repository name. |
+| `github.queueRepo` | no | Optional GitHub **build** queue repository, distinct from this repo's identity and PRD source. Store the canonical `owner/repo`. A short repo name is accepted at runtime and normalized to `github.org`. Explicit GitHub repo/URL arguments always win; otherwise GitHub build intake, build repair, build queue status, and scheduled ticket commands use this value, falling back to `github.org/github.repo` when absent. This never changes `repo:<name>` scoping, PRD intake, or automation naming, which remain tied to `repo` / `github.repo`. |
 | `github.projects.v2.owner.kind` | GitHub Project coordination is enabled | Owner type for the shared ProjectV2. Supported values are `organization` and `user`. |
 | `github.projects.v2.owner.slug` | GitHub Project coordination is enabled | Owner login for the shared ProjectV2. In v1 it MUST match the tracked repository namespace (`github.org`); cross-namespace coordination is rejected. |
 | `github.projects.v2.number` | GitHub Project coordination is enabled | Human-facing ProjectV2 number from the GitHub UI / URL. Later utilities resolve the opaque node id from this owner + number pair. |
 | `github.projects.v2.required` | no | Coordination strictness flag. Default `false` keeps Project membership best-effort; `true` makes Project membership failures block the write. Setup/doctor/runtime validation reads Project ownership + access and branches on this flag: best-effort failures warn, required-mode failures stop the write. |
+| `github.environments` | no | Optional map of friendly environment name → deployment-environment declaration, provisioned by `/lisa:setup:github-repo` (`scripts/lisa-github-environments.sh`). Absent → no environments are touched. Each declared environment gets a deployment branch policy pinned to its branch. |
+| `github.environments.<name>.branch` | no | Branch that deploys to this environment. Resolution order: this field → `deploy.branches[<name>]` → the environment name itself. |
+| `github.environments.<name>.require_approval` | no | Default `false`. `true` provisions required reviewers on the environment and makes the stack `deploy.yml` templates pass `require_approval`/`approval_environment` to `release.yml`, pausing the run at the `release_approval` job until a reviewer approves. |
+| `github.environments.<name>.reviewers` | `require_approval = true` | Array of GitHub usernames or `org/team-slug` entries (max 6) allowed to approve deployments. Mandatory with `require_approval` — an approval gate nobody can approve is refused at provision time. |
+| `github.environments.<name>.prevent_self_review` | no | Default `false`. `true` stops the person who triggered the deployment from approving it themselves. |
+| `github.environments.<name>.wait_timer` | no | Default `0`. Minutes to delay the deployment after approval. |
 
 When `tracker = "github"` AND `source = "github"` (self-host), both reads and writes hit the same GitHub repo. Label namespaces are kept separate so the two flows don't collide — see "Self-host edge case" below.
+
+When `github.queueRepo` points at an umbrella repository, build-queue **scans** happen there while the
+current repository's identity remains `github.org/github.repo`. Resolve a GitHub queue in this
+order for a build-mode scan: explicit `owner/repo` or GitHub URL argument, merged-config `github.queueRepo`, then
+`github.org/github.repo`. Queue status must show both identity and queue; build counts and claims
+remain filtered to `repo:<github.repo>`. Setup writes the canonical `owner/repo` form and omits the
+key when the queue is the identity repo.
 
 `github.projects.v2` is optional. When absent, GitHub issue / PR writes remain repository-local exactly as they work today. When present, the shared Project is a coordination view layered on top of real issues and pull requests; it does not replace lifecycle labels, comments, dependencies, or native issue / PR state as Lisa's durable source of truth.
 
@@ -302,6 +449,52 @@ When `github.projects.v2` is present, later setup/doctor and writer preflight va
 |-------|---------------|-------|
 | `linear.workspace` | `tracker = "linear"`, `source = "linear"`, or any `linear-*` skill is invoked | Linear workspace slug (e.g. `acme`). |
 | `linear.teamKey` | `tracker = "linear"` | Linear team key (e.g. `ENG`). The team owns the destination Issues. For source mode, projects are workspace-scoped or team-scoped per the URL passed. |
+| `linear.workflow` | `tracker = "linear"` | Workflow **state** name per build lifecycle role — the Linear analogue of `jira.workflow`, not of `github.labels`. Defaults `{ ready: "Ready", claimed: "In Progress", blocked: "Blocked", done: { dev: "On Dev", staging: "On Stg", production: "Done" } }` — **no `review` key**, because it is optional and a default would be materialized into the project's config by `lisa sync`. **`ready` is a dedicated state, never the team's default** — see below. Resolve and verify with `/lisa:setup:linear`. |
+| `linear.labels` | `tracker = "linear"` or `source = "linear"` | **Markers and the PRD lane only.** `build.human_needed` (default `human-needed`) and the `prd.*` map. The build lifecycle does **not** live here — see `linear.workflow`. |
+
+##### Why Linear uses states, not labels
+
+Linear Issues carry first-class workflow states with a machine-readable `type`
+(`backlog` / `unstarted` / `started` / `completed` / `canceled`) — the same shape
+JIRA statuses have. GitHub Issues has no such field (only open/closed), which is
+why the GitHub adapter *must* use labels; that is a constraint of GitHub's data
+model, not a Lisa preference, and Linear does not share it.
+
+Driving Linear off labels left **two writers on one lifecycle**: Linear's own git
+automations move `state` on merge while Lisa moved only labels. The two then
+disagreed permanently on any merge that did not run through a Lisa flow, and the
+env rungs (`On Dev` / `On Stg`) could never appear on a Linear board, cycle or
+insight at all, because those group by state.
+
+The historical objection was that per-team state NAMES vary and get renamed. That
+is equally true of JIRA statuses, which Lisa keys on regardless, and Linear
+additionally exposes the rename-proof `type` discriminator that the lifecycle
+skills already use for terminal detection. Names live in config, so a project
+that renames a state overrides one key.
+
+#### `verification.browser.kane`
+
+Kane CLI is an optional empirical-browser provider. It is never enabled by executable discovery
+alone and never replaces native regression runners.
+
+| Field | Required when | Where it lives | Notes |
+|-------|---------------|----------------|-------|
+| `verification.browser.kane.enabled` | using Kane | **committed** | Must be literal `true`; absent/false means Lisa does not probe or select Kane. |
+| `verification.browser.kane.version` | enabled | **committed** | Exact contract-tested version, currently `0.6.3`. Version ranges and implicit latest are rejected. |
+| `verification.browser.kane.cloudUploadApproved` | enabled | **committed** | Exterior human approval that TestMu may receive objectives, screenshots, action logs, variables in scope, metadata, and packaged run artifacts from disposable test environments. |
+| `verification.browser.kane.allowedEnvironments` | enabled | **committed** | Non-empty environment allow-list. `prod` and `production` are invalid regardless of other config. Each environment must also resolve to `exploration.environments.<name>.mutation = full` at run time. |
+| `verification.browser.kane.projectId` | enabled | **committed** | Expected Test Manager project identifier. `lisa kane probe` verifies the active CLI config matches it. |
+| `verification.browser.kane.folderId` | no | **committed** | Optional expected Test Manager folder identifier, also verified by the probe. |
+| `verification.browser.kane.timeoutSeconds` | no | **committed** | Integer 1–600; defaults to 120. Lisa adds a small outer process-kill grace period. |
+
+Credentials never live in Lisa config. Developer OAuth state remains in Kane's protected local
+profile; CI uses its secret store and a dedicated service identity. Local config may override a
+Kane key per the normal per-key precedence, but shared upload policy, allow-list, and Test Manager
+target should be committed so teammates and automations see the same gate.
+
+Use `/lisa:setup-kane` only at the exterior setup gate. Factory workflows invoke
+`lisa-kane-browser`, which calls the Lisa adapter (`lisa kane probe/run`) rather than consuming the
+vendor's global skill or `agents.md`.
 
 #### `usage`
 
@@ -339,33 +532,81 @@ Every lifecycle skill operates on a fixed set of **roles** (`ready`, `claimed`, 
 
 **Build lifecycle** (work items):
 
-| Role | What it means | JIRA default | GitHub/Linear default |
-|---|---|---|---|
-| `ready` | Human signal "this is buildable; agent may claim" | `Ready` (status) | `status:ready` (label) |
-| `claimed` | Agent has picked the item up | `In Progress` (status) | `status:in-progress` (label) |
-| `review` | Optional post-build review hold, when a tracker/project still uses one | `Code Review` (status) | Linear default: `status:code-review`; GitHub has no default review label |
-| `blocked` | Agent stopped on triage ambiguities or external blocker | `Blocked` (status) | `status:blocked` (label) |
-| `done` | Terminal state for this work, **env-keyed** | map of env → status | map of env → label |
+| Role | What it means | JIRA default | Linear default | GitHub default |
+|---|---|---|---|---|
+| `ready` | Human signal "this is buildable; agent may claim" | `Ready` (status) | `Ready` (state) | `status:ready` (label) |
+| `claimed` | Agent has picked the item up | `In Progress` (status) | `In Progress` (state) | `status:in-progress` (label) |
+| `review` | Optional post-build review hold, when a tracker/project still uses one | **no default** | **no default** | **no default** |
+| `blocked` | Agent stopped on triage ambiguities or external blocker | `Blocked` (status) | `Blocked` (state) | `status:blocked` (label) |
+| `done` | Terminal state for this work, **env-keyed** | map of env → status | map of env → state | map of env → label |
 
-`review` is optional. GitHub build intake skips it by default and moves successful builds directly from `claimed` to the configured `done` label. Linear and JIRA projects that still use a post-build review hold can configure `review`; projects that keep the ticket in `claimed` until terminal can omit it and lifecycle skills will skip the intermediate transition.
+**JIRA and Linear resolve roles to native workflow statuses/states** (`jira.workflow`, `linear.workflow`); **GitHub resolves them to labels** (`github.labels.build`) because GitHub Issues has no workflow-state field at all. A role transition is therefore a *state move* on JIRA and Linear, and a *label swap* on GitHub. Skills operate on roles and never hardcode either form.
+
+### R1 — an absent OPTIONAL role means SKIP, never a default
+
+`ready`, `claimed`, `blocked` and `done` are **required**; omitting one is a setup defect and a skill must say so. `review`, the `qa.*` roles and `human_needed` are **optional and carry no built-in default on any vendor**. Omitting one means the project does not run that step, and every lifecycle skill skips the transition — the item simply stays in its current role.
+
+A default on an optional role breaks this twice over. Vendor default maps are `defaultValue`s in `sync/registry`, so `lisa sync` **materializes** them into a project's `.lisa.config.json` — a project that deliberately omitted `review` finds it written back in. And as a resolution fallback, a default makes "unset" indistinguishable from "not customized", so no project can express *"we have no agent review step."*
+
+Measured downstream: a project bound no `review` role — its policy was that a PR-open ticket stays in `claimed` until it reaches an environment — and agents moved two issues into a human-only review state regardless, because every layer that could have honoured the omission supplied a default instead.
+
+GitHub has always been correct here (`BUILD_LABEL_DEFAULTS` seeds no `review`), and `lisa-jira-evidence/scripts/post-evidence.sh` has always implemented it correctly (`REVIEW=""`, explicit skip branch). The default maps for JIRA and Linear now agree with them.
+
+### R2 — a fallback may inform a READ, never supply a WRITE target
+
+Where a vendor exposes a fallback for a missing role — Linear resolves states by `type`, since Linear states carry one — it may be used to *read*. It must **never** supply a value to write.
+
+Such a fallback selects by **board position**, not intent. On a board carrying more than one plausible state it returns whichever sits earliest, and the states that surface that way are precisely the human-only lanes a project kept out of its config on purpose. Measured on one board: with `blocked` and `claimed` already bound, the lowest-position unbound `started` state was a human-only review lane, and that is exactly where two issues landed.
+
+`ready` has no fallback at all, in either direction — see below.
+
+### The single resolver
+
+Every skill resolves roles through `${CLAUDE_PLUGIN_ROOT}/scripts/resolve-lifecycle-role.mjs`, never an inlined `read_role()` helper. Twelve skills previously inlined one and produced **eleven distinct implementations**; that copy-paste is what let the vendors drift apart on R1.
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/resolve-lifecycle-role.mjs" \
+  --role <role> --vendor <jira|linear|github> --intent <read|write> [--env <env>]
+```
+
+Exit `0` with a value → configured. Exit `0` with **empty** output → an optional role is unset; skip the transition. Exit `2` → a required role is unset, or a write was refused a fallback value.
+
+**`ready` must never resolve to the team's DEFAULT state.** `Todo` is where Linear puts a brand-new issue, so using it for `ready` inverts the gate: the lane stops meaning "a human flipped this to build-ready" and starts meaning "nobody has touched this". Measured on the first team migrated: 20 issues in the lane, only 8 ever explicitly marked ready. JIRA avoids this because `jira.workflow.ready` is a dedicated `Ready` status while a fresh ticket lands in the project default.
+
+**That rule is enforced, not merely stated — a correct default is only half the fix.** The default is `Ready`, but any project can override `linear.workflow.ready`, and an override reproduces the inversion exactly. Two arms catch it, deliberately split by what each can see:
+
+- **Static, always-on.** The queue-contract resolver refuses a `ready` naming a stock default created state (`Todo`, `To Do`, `Backlog`, `Triage`) and throws rather than resolving. It needs no network, so it runs everywhere, including offline and in CI. It cannot see a team that renamed its default.
+- **Live, authoritative.** `/lisa:validate-tracker-mapping` compares the configured `ready` against the team's real `defaultIssueState` (surfaced as `isTeamDefault` on `lisa-linear-access operation: list-workflow-states`) and classifies a match as `INVERTED` — never `VALID`, and never auto-repaired, because nothing records what lane the human meant instead.
+
+`INVERTED` is not a name-resolution failure; it is the opposite. The name resolves perfectly, which is precisely why every existence check passes while the gate runs backwards.
+
+**Linear state resolution is `type`-aware.** When a configured name is missing, a lifecycle skill may fall back to the team's states by `type` — `claimed`/`review` → the lowest-position `started`, `blocked` → `started` or `unstarted`, terminal `done` → `completed` — but only to *read*. **`ready` has no fallback on purpose:** every candidate would be the team's default unstarted state, which is exactly the inversion described above. A missing `ready` state is reported, never guessed; it must never invent a state to write into. Missing states are a setup defect, repaired by `/lisa:setup:linear`, not papered over at runtime.
 
 `blocked` is what every vendor agent flips to when triage finds unresolved ambiguities or the build path is blocked by something the agent can't resolve. Different from `claimed` because it explicitly signals "human attention required."
 
 #### Build markers (additive labels, not lifecycle roles)
 
-A **marker** is an additive label applied *alongside* a lifecycle role, not a state the item transitions *to*. Markers carry no rollup or transition semantics — they annotate an item that is already in some role. The build lifecycle defines one marker:
+A **marker** is an additive label applied *alongside* a lifecycle role, not a state the item transitions *to*. Markers carry no rollup or transition semantics — they annotate an item that is already in some role, and the rollup reads them to say *which kind* of hold a `blocked` item is (`rollup-blocker-classification`). The build lifecycle defines two markers:
 
 | Marker | What it means | JIRA default | GitHub/Linear default |
 |---|---|---|---|
 | `human_needed` | Applied with `blocked` when — **after the agent has drafted every authorable missing section via the `pre-flight-autofill` procedure** — the block still requires a human to confirm the drafted assumptions or supply something no agent can invent: real missing credentials, access/permissions, or an irreducible product/scoping decision. | `Human Needed` (label) | `human-needed` (label) |
+| `spec_defect` | Applied with `blocked` when the thing holding the item is the item's **own specification** — an acceptance criterion that cannot be satisfied as written, a field naming an environment or surface the project does not have, a validation journey demanding something the project cannot produce. **Human-applied only.** No agent sets it, because judging a criterion unbuildable is a product call, and the agent that wrote a bad criterion is the least likely to know it did. | `Spec Defect` (label) | `blocked:spec-defect` (label) |
+
+Markers are labels on **every** vendor, Linear included — that is the one place the Linear build lane still touches `linear.labels`.
 
 Resolution keys:
 
 - JIRA: `jira.labels.human_needed` (default `Human Needed`). Applied as a JIRA **label** — not a workflow status — because an item holds exactly one status but any number of labels. The `blocked` status still drives the lifecycle; `human_needed` is the additive marker on top of it.
 - GitHub: `github.labels.build.human_needed` (default `human-needed`). Added next to the `blocked` label.
-- Linear: `linear.labels.build.human_needed` (default `human-needed`). Added next to the `blocked` label.
+- Linear: `linear.labels.build.human_needed` (default `human-needed`). Applied as a Linear **label**, for the same reason as JIRA — an Issue holds exactly one workflow state but any number of labels, so an additive marker cannot be a state. The `blocked` **state** still drives the lifecycle; `human_needed` is the marker on top of it. This is the only build-lane key left in `linear.labels`.
+- `spec_defect` resolves the same way on each vendor — `jira.labels.spec_defect` (default `Spec Defect`), `github.labels.build.spec_defect` and `linear.labels.build.spec_defect` (default `blocked:spec-defect`).
 
-**When to apply it.** Apply `human_needed` only when a human must act before the item can move — the pre-flight gate failures that bounce a ticket back to its reporter are exactly this case, but **only after** the agent has run the `pre-flight-autofill` draft-then-block procedure (drafting the authorable gaps — acceptance criteria, validation journey, repository, relationship search, etc. — into the ticket as labeled assumptions). What then remains for the human is to **confirm those assumptions** or supply a genuinely human-only input (real missing credentials, an irreducible product/scoping decision). The marker means "a human must confirm or decide," not "a human must author from scratch."
+**When to apply it.** There are two application sites. The first is **at filing**: a leaf filed with a `human_gate` reason under `ready-role-filing` carries the `[lisa-human-gate]` body marker *and* this label, so the hold is legible to a path that reads bodies and to a path that reads labels alike. Such an item sits in no lifecycle role at all rather than in `blocked`, which is the one case where this marker stands beside no role — and it is deliberate: a hold recorded on only one surface is a half-armed gate, and the label-keyed sweeps promoted exactly that population into the build queue (#3805). The second site is a **block a human must clear**: apply `human_needed` only when a human must act before the item can move — the pre-flight gate failures that bounce a ticket back to its reporter are exactly this case, but **only after** the agent has run the `pre-flight-autofill` draft-then-block procedure (drafting the authorable gaps — acceptance criteria, validation journey, repository, relationship search, etc. — into the ticket as labeled assumptions). What then remains for the human is to **confirm those assumptions** or supply a genuinely human-only input (real missing credentials, an irreducible product/scoping decision). The marker means "a human must confirm or decide," not "a human must author from scratch."
+
+**Why `spec_defect` is separate from `human_needed`.** Both name a hold a person must clear, but they are different asks and the rollup must not merge them. `human_needed` waits on an input from *outside* the item — a credential, an access grant, a product decision — and the item's own text is fine. `spec_defect` waits on the item's text being *rewritten*, and no external event will ever supply that. An item carrying `spec_defect` will sit forever until somebody edits it; that is exactly the class that accumulated silently when the rollup rendered both as plain `blocked` (issue #3045: 32 identical hold comments over six weeks on one Epic). Where both markers are present, `spec_defect` wins — it is the more specific record, and the only one carrying a judgment nothing else can supply.
+
+**Nothing infers `spec_defect`.** It is never derived from prose, a title, or a failed gate. A `blocked` item carrying neither marker and no open `is blocked by` link classifies as **`unknown`**, and the rollup says so and asks a person to decide — an honest `unknown` beats a confident wrong answer, and auto-reclassifying would turn a human product call into a guess.
 
 **When NOT to apply it.** Do **not** apply `human_needed` to a block that an automated cycle can clear on its own: a block whose `is blocked by` dependency is another tracked ticket that will build and close (for example a `repair-intake`-filed build-ready fix ticket for an unmergeable PR or a failed deploy), or any block waiting only on a retry. Those self-heal; flagging them for a human is noise. If such an item already carries a stale `human_needed` marker, clear it when the block becomes auto-recoverable.
 
@@ -412,10 +653,10 @@ contract: the `observability-audit` rule.
 | `monitor.maxCandidates` | no | `20` | Cap on tickets filed per standalone run (`core`/high-severity first). Overridable per-run via `max_candidates=<n>` in `$ARGUMENTS`, which always wins. |
 | `monitor.gapTiers` | no | `core` | Which gap tier files tickets by default: `core` (operationally load-bearing dimensions only) or `all` (also `recommended`). The `--all-gaps` run flag forces `all` for that invocation. |
 | `monitor.backoffHours` | no | `24` | How long after a finding's ticket is closed/resolved to keep suppressing a re-file (the recently-resolved dedup window), so a just-fixed regression isn't re-filed before its signal drains. Distinct from `intake.repair.staleAfterHours` (2h). |
-| `monitor.thresholds.sentryMinEvents24h` | no | `10` | Minimum 24h event count for an unresolved Sentry error to be fileable. |
+| `monitor.thresholds.minEvents24h` | no | `1` | Minimum 24h event count for an unresolved monitored error to be fileable. |
 | `monitor.thresholds.errorRateSpikeMultiplier` | no | `2` | Error rate must be ≥ this × the prior-window baseline (and above an absolute floor) to file. |
 | `monitor.thresholds.p95LatencyMs` | no | `1000` | p95 latency at/above this (or up ≥ 50% vs prior window) is a fileable regression. |
-| `monitor.thresholds.xrayFaultRatePct` | no | `5` | X-Ray fault traces above this % of traces in the window is a fileable anomaly. |
+| `monitor.thresholds.faultRatePct` | no | `5` | Fault observations above this percentage of observations in the window constitute a fileable anomaly. |
 
 Resolution order matches every other key: `$ARGUMENTS` override → `.lisa.config.local.json` →
 `.lisa.config.json` → built-in default. `monitor` files only within the current repo (type-scoped
@@ -456,17 +697,96 @@ Skills that transition to `done` MUST resolve the env first:
 1. **Explicit caller arg** (`target_env=staging`) — always wins.
 2. **Branch inference** — derive from the PR's base branch via `deploy.branches`. Reverse-lookup: if base branch is `staging`, env is `staging`.
 3. **Failure** — if neither resolves and `done` is a map, fail loudly. Never pick arbitrarily.
+4. **Promotion completeness** — cap the resolved env by the gate below before writing anything. Steps 1–2 resolve a *candidate*; the gate decides what is written.
 
 If a project's terminal state is the same regardless of env, set `done` to a string instead of a map (lifecycle skills accept either shape).
+
+#### Promotion completeness: every environment at or below the resolved one
+
+A merged PR's base branch says which environment the change **entered**. It never says which
+environments the change has **reached**. A hotfix merged straight to `main` enters production by an
+out-of-order route: the reverse-lookup resolves `production`, `production` is the terminal value,
+and the item closes while `staging` has none of the fix. Reaching the terminal environment is not
+the same as being delivered, and a base branch alone cannot tell those apart.
+
+So the resolved env is not the env that gets written. Walk `deploy.order` from its **lowest** rung
+and keep rungs while they are **reached**, stopping at the first that is not. A rung is reached
+when both hold for its `deploy.branches` branch:
+
+- **Ancestry** — the merge commit is an ancestor of the remote env branch:
+  `git fetch origin <branch> && git merge-base --is-ancestor <merge-sha> origin/<branch>`. Assert
+  this for **every** env branch at or below the resolved one — never only the PR's base.
+- **Deploy health** — that branch's most recent deploy **concluded `success`**. Read the
+  `conclusion`, never the `status`: an in-flight deploy has a null conclusion and is
+  indistinguishable from a pass on the status field alone. Only `success` promotes — a null
+  conclusion and every other conclusion (`failure`, `cancelled`, `timed_out`, `neutral`, `skipped`,
+  `stale`, `action_required`) leave the rung **unreached**. "Did not fail" is not the test: a
+  cancelled or skipped run is not evidence the change deployed.
+
+The written env is the highest **contiguously reached** rung at or below the resolved one — never a
+higher rung, even when the higher rung is reached and a lower one is not. A merge present in `dev`
+and `main` but absent from `staging` resolves to `dev` (`On Dev`), not `production`: the item stays
+open at an intermediate waypoint, and the promotion gap is what holds it open. When no rung at all
+is reached, write nothing and leave the item in its current role.
+
+Refusals are named, never silent, and one schema covers every case. Whenever the gate caps the env
+below the resolved one, the recorded reason MUST carry **all three** fields — none is optional in
+any case:
+
+```
+<first unreached env> (<its branch>) — <condition>
+```
+
+`<condition>` is exactly one of:
+
+- `missing ancestry` — the merge commit is not an ancestor of that branch.
+- `deploy unknown: <run URL, or "no concluded run">` — the branch has a deploy surface, but its most
+  recent run has not concluded, or nothing has ever concluded for it.
+- `deploy concluded <conclusion>: <run URL>` — the most recent run concluded as something other than
+  `success` (`failure`, `cancelled`, `timed_out`, `neutral`, `skipped`, `stale`, `action_required`).
+
+"Merged to `main` and production deployed green" and "not in `staging`" are both facts; a reason that
+carries only the first is the defect. A failing run named without its environment and branch, or an
+environment named without the condition that failed it, is an incomplete reason and not acceptable.
+
+Two classifications this gate forbids:
+
+- An **open back-fill PR** against a skipped environment branch is *outstanding delivery*, not
+  branch hygiene. It is the evidence that a rung was skipped, so it is a reason to hold the item
+  open — never a reason to discount the gap and close anyway.
+- An **in-flight deploy** is unknown, not green. When a rung's ancestry holds but its deploy run has
+  not concluded, do not write that rung this cycle: leave the item where it is and let a later cycle
+  read a concluded run. Only a concluded success promotes. A project that exposes **no** deploy
+  surface for a branch is a different case — there, ancestry alone decides the rung; the absence of
+  a deploy system is not an unconcluded deploy.
+
+Where `deploy.order` is absent the ladder is the single resolved env, and the gate is the ancestry
+and deploy-health check on that one rung. Multi-branch projects MUST set `deploy.order` (see "Env
+order" below), so an absent order can never silently skip the ladder.
 
 ### Env → base branch (forward: the build base and PR base)
 
 `deploy.branches` is also read in the **forward** direction by the build flow (`lisa-implement`): the environment a work item targets determines the branch the work is built on and the branch the PR opens against.
 
-1. **Resolve the work item's target environment** — its `## Target Backend Environment` field.
-2. **If no environment is named**, use the **remote default branch** (`gh repo view --json defaultBranchRef`, or `origin/HEAD`) and record that default-branch assumption.
-3. **If a reported environment exists**, map env → base branch via `deploy.branches` (e.g. `staging → staging`, `production → main`). A reported env absent from `deploy.branches`, or a mapped branch missing from the remote, must stop and report the exact missing environment-to-branch mapping; never guess and never silently fall back.
-4. **Before any code is written**, `lisa-implement` fetches and **rebases the working branch onto `origin/<base>`, resolving conflicts**, so implementation builds on the latest target-environment code. **The PR then opens against that same base branch** (`target_branch=<base>` to `lisa-git-submit-pr`).
+The durable field forms are: bare configured key or `Confirmed: <env>` for a
+human-confirmed value; `Inferred: <env> — evidence: <title|body|reproduction|hostname>`
+for automation-backed evidence; and
+`Assumption: <env> — remote default branch <branch>` for a generic fallback.
+When the remote default has no unique environment reverse-map, the valid form is
+`Assumption: remote default branch <branch>`.
+Human confirmation replaces the automated annotation with a bare key or
+`Confirmed: <env>`.
+
+For a legacy bare value, use managed draft markers and current ticket content
+only; do not require provider edit history. A marker proves automation and
+requires re-annotation; otherwise unknown provenance plus conflicting evidence
+stops for confirmation.
+
+1. **Resolve provenance first.** Human-confirmed wins, then validated `Inferred:` evidence. Otherwise search the human-authored title, body, and reproduction steps or URL hostname for one unambiguous exact `deploy.branches` key. Exclude the complete `Target Backend Environment` section and other machine-authored metadata/draft blocks from the scan so annotations cannot become evidence. Evidence supersedes only an `Assumption:`.
+2. **Normalize narrowly.** Normalize built-in `prod` ↔ `production` only when exactly one of those keys is configured. No other aliases exist. Never infer from arbitrary branch text, URL paths/query strings, or substrings.
+3. **Handle absence and conflict explicitly.** Multiple conflicting signals stop. With no signals, use the remote default branch (`gh repo view --json defaultBranchRef`, or `origin/HEAD`) and record the env-bearing assumption only for a unique reverse-map; otherwise use the branch-only assumption without inventing an environment or blocking.
+4. **Validate the destination.** The selected exact configured key must map uniquely and the mapped remote branch must exist; otherwise stop without guessing or falling back.
+5. **Before any code is written**, `lisa-implement` fetches and **rebases the working branch onto `origin/<base>`, resolving conflicts**, then opens the PR against that same base (`target_branch=<base>`).
 
 This is the exact inverse of the env-keyed `done` "Branch inference" above: `done` derives the env *from* the PR base branch (reverse); the build flow derives the base branch *from* the env (forward). Both use the one `deploy.branches` map, so the branch a PR targets and the `done` status it earns always agree.
 
@@ -475,6 +795,7 @@ The true terminal `done` value is also the only value that triggers provider-nat
 - If `done` is a string, that value is terminal.
 - If `done` is an env-keyed map, the production / final environment's value is terminal. The conventional key is `production`; project-specific final env names must be explicit in deploy config or the lifecycle skill must fail rather than guessing.
 - Intermediate env values (`dev`, `staging`, or configured equivalents) are deployment waypoints. Applying them must not close / resolve / complete the native tracker item.
+- The terminal value is earned only by a **promotion-complete** merge: every env branch at or below the terminal one carries the merge commit, and none of their most recent concluded deploys failed. A merge that reached the terminal environment out of order has not earned the terminal value — see "Promotion completeness" above.
 
 ### Env order (sync-down chain)
 
@@ -485,8 +806,8 @@ cannot: the relative rank of environments. `deploy.branches` is an unordered map
 so without `deploy.order` the rank of a custom env name (`preprod`, `qa`, …) is
 unknowable.
 
-The back-sync GitHub Action (`reusable-claude-sync-down-branches.yml`) consumes
-`deploy.order` to derive its source → target chain. It walks the order from the
+The Lisa back-sync flow consumes `deploy.order` to derive its source → target
+chain. It walks the order from the
 **highest** environment **down**, mapping each env's branch to the next-lower
 env's branch:
 
@@ -660,6 +981,7 @@ The shim → vendor mapping is fixed:
 | `lisa-tracker-validate` | `lisa-jira-validate-ticket` | `lisa-github-validate-issue` | `lisa-linear-validate-issue` |
 | `lisa-tracker-verify` | `lisa-jira-verify` | `lisa-github-verify` | `lisa-linear-verify` |
 | `lisa-tracker-read` | `lisa-jira-read-ticket` | `lisa-github-read-issue` | `lisa-linear-read-issue` |
+| `lisa-tracker-claim` | `lisa-jira-claim` | `lisa-github-claim` | `lisa-linear-claim` |
 | `lisa-tracker-evidence` | `lisa-jira-evidence` | `lisa-github-evidence` | `lisa-linear-evidence` |
 | `lisa-tracker-sync` | `lisa-jira-sync` | `lisa-github-sync` | `lisa-linear-sync` |
 | `lisa-tracker-add-journey` | `lisa-jira-add-journey` | `lisa-github-add-journey` | `lisa-linear-add-journey` |
@@ -672,7 +994,7 @@ The `tracker-source-artifacts` skill (formerly `tracker-source-artifacts`) is re
 ## Caller responsibilities
 
 - **PRD-source skills** (`notion-to-tracker`, `confluence-to-tracker`, `linear-to-tracker`, `github-to-tracker`) MUST invoke `tracker-write` and `tracker-validate` — never `jira-write-ticket` / `github-write-issue` / `linear-write-issue` directly. This is what makes a project's destination switchable via config.
-- **Lifecycle skills** (`implement`, `verify`, `monitor`) MUST invoke `tracker-read`, `tracker-evidence`, `tracker-sync` for ticket interaction — never the vendor-specific equivalents.
+- **Lifecycle skills** (`implement`, `verify`, `monitor`) MUST invoke `tracker-read`, `tracker-claim`, `tracker-evidence`, `tracker-sync` for ticket interaction — never the vendor-specific equivalents.
 - **Per-vendor PRD intake skills** (`notion-prd-intake`, `confluence-prd-intake`, `linear-prd-intake`, `github-prd-intake`) compose the PRD-source skills (which in turn invoke the shims) — they do not need to read `tracker` themselves.
 - **Vendor-specific destination skills** (`jira-*`, `github-*`, `linear-*`) read their own vendor config section directly. They do NOT consult `tracker` — they are the targets of dispatch, not the dispatchers.
 
@@ -706,7 +1028,7 @@ When `github-to-tracker` is invoked AND `tracker = "github"`, both reads and wri
 
 Never overload one label across both lifecycles.
 
-The same separation applies for Linear self-host (`source = "linear"` AND `tracker = "linear"`): project-level labels (`prd-*`) drive the PRD lifecycle; issue-level labels (`status:*`) drive the build lifecycle; the sentinel feedback issue carries the issue-level `prd-intake-feedback` label.
+The same separation applies for Linear self-host (`source = "linear"` AND `tracker = "linear"`), with one asymmetry: project-level **labels** (`prd-*`) drive the PRD lifecycle, because a PRD is a Linear Project and Projects carry their own status object rather than Issue workflow states; issue-level **workflow states** (`linear.workflow`) drive the build lifecycle; clarifying-question comments go on the Project itself via `commentCreate(input: { projectId, body })`, so the PRD lane needs no issue label of its own (`prd-intake-feedback` survives only to recognise the fabricated feedback issues earlier versions created). So on Linear the two lanes are not merely different vocabularies, they are different *mechanisms* — never move a PRD by state or an Issue by `status:*` label.
 
 ## Notion access (substrate ladder)
 
@@ -735,16 +1057,47 @@ read_notion_token() {
   local slug=$(echo "$workspace" | tr '[:upper:]-' '[:lower:]_')
   local varname="NOTION_API_TOKEN_${slug}"
   [ -n "${!varname}" ] && { echo "${!varname}"; return; }
+  # Preferred path: the single secrets chokepoint, which owns the one-store rule
+  # and the surface ladder. An agent following this reference must try it before
+  # any keychain — a second reader is how one credential ends up in two places.
+  #
+  # Resolver scripts are executable code, so a familiar checkout-local path is
+  # not provenance. Use only machine-managed plugin roots and the installed
+  # package; never execute repository-controlled candidates from this ladder.
+  local candidates=()
+  if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+    candidates+=("$CLAUDE_PLUGIN_ROOT/skills/lisa-secrets-access/scripts/resolve-secret.mjs")
+  fi
+  if [ -n "${PLUGIN_ROOT:-}" ]; then
+    candidates+=("$PLUGIN_ROOT/skills/lisa-secrets-access/scripts/resolve-secret.mjs")
+  fi
+  local repo_root="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+  candidates+=("$repo_root/node_modules/@codyswann/lisa/plugins/lisa/skills/lisa-secrets-access/scripts/resolve-secret.mjs")
+  local resolver
+  local tried=()
+  for resolver in "${candidates[@]}"; do
+    tried+=("$resolver")
+    if [ -f "$resolver" ]; then
+      local via_lisa
+      via_lisa=$(node "$resolver" get NOTION_API_TOKEN 2>/dev/null) \
+        && [ -n "$via_lisa" ] && { echo "$via_lisa"; return; }
+      # Empty/error means this substrate had no answer; try the next trusted one.
+    fi
+  done
+  # Legacy fallback: the OS keychain written by the guided setup flow, for
+  # projects with no credentials provider. Reached only when the chokepoint is
+  # absent or has no entry.
+  local from_keychain=""
   case "$(uname -s)" in
-    Darwin)  security find-generic-password -s lisa-notion -a "$workspace" -w 2>/dev/null ;;
+    Darwin)  from_keychain=$(security find-generic-password -s lisa-notion -a "$workspace" -w 2>/dev/null) ;;
     Linux)   command -v secret-tool >/dev/null && \
-             secret-tool lookup service lisa-notion account "$workspace" 2>/dev/null ;;
+             from_keychain=$(secret-tool lookup service lisa-notion account "$workspace" 2>/dev/null) ;;
     MINGW*|MSYS*|CYGWIN*)
       # `cmdkey /generic ... /pass:` stores the secret in Windows Credential Manager, but
       # `cmdkey /list` never prints stored passwords (by design). Read the CredentialBlob
       # back via the Win32 CredRead API through PowerShell; pass the target name via an env
       # var to dodge nested quoting, and strip the CRLF powershell.exe appends.
-      LISA_CRED_TARGET="lisa-notion-${workspace}" powershell.exe -NoProfile -NonInteractive -Command '
+      from_keychain=$(LISA_CRED_TARGET="lisa-notion-${workspace}" powershell.exe -NoProfile -NonInteractive -Command '
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -770,8 +1123,19 @@ public static class LisaCred {
   }
 }
 "@
-[LisaCred]::Read($env:LISA_CRED_TARGET)' 2>/dev/null | tr -d '\r' ;;
+[LisaCred]::Read($env:LISA_CRED_TARGET)' 2>/dev/null | tr -d '\r') ;;
   esac
+  [ -n "$from_keychain" ] && { echo "$from_keychain"; return; }
+
+  # Name every path. A bare empty return sends the next reader hunting for a
+  # resolver they cannot see the absence of; the enumeration turns that into a
+  # seconds-long diagnosis. Paths and store coordinates only — never any
+  # resolved value, on any path.
+  echo "Error: could not resolve NOTION_API_TOKEN through lisa-secrets-access or the legacy keychain." >&2
+  echo "Tried, in order (relative paths are from $PWD):" >&2
+  printf '  %s\n' "${tried[@]}" >&2
+  echo "  <OS keychain> service=lisa-notion account=$workspace" >&2
+  return 1
 }
 ```
 

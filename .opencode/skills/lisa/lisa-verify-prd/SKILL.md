@@ -1,7 +1,7 @@
 ---
 name: lisa-verify-prd
-description: "Initiative-level PRD acceptance gate. Given a PRD ref/URL (GitHub, Linear, Notion, Confluence, or JIRA), resolves the source vendor, reads the PRD and its generated top-level child work via the prd-lifecycle-rollup contract, and confirms every required child is terminal before any verification runs — if any is non-terminal it reports the incomplete set and STOPS. When the guard passes it runs spec-conformance against the original PRD requirements plus empirical verification via verification-lifecycle. On CONFORMS with all checks passing: transitions the PRD shipped → verified and posts evidence. On PARTIAL/DIVERGES or any failing check: re-opens the PRD shipped → ticketed (NEVER blocked), creates build-ready fix tickets for each divergence, and posts a product-readable failure report — the fix tickets auto-build, rollup re-ships the PRD, and a later intake cycle re-verifies, so the loop closes itself. Idempotent re-runs: comments regenerate in place via sentinel markers; fix tickets dedupe by stable ref."
-allowed-tools: ["Skill", "Bash", "Read", "mcp__claude_ai_Notion__notion-fetch", "mcp__claude_ai_Notion__notion-get-comments", "mcp__atlassian__getConfluencePage", "mcp__atlassian__getConfluencePageDescendants", "mcp__atlassian__getJiraIssue", "mcp__atlassian__searchJiraIssuesUsingJql", "mcp__atlassian__getAccessibleAtlassianResources"]
+description: "Initiative-level PRD acceptance…"
+allowed-tools: ["Skill", "Bash", "Read"]
 ---
 
 # PRD-level Verification: $ARGUMENTS
@@ -39,9 +39,11 @@ Detect the vendor from `$ARGUMENTS` the same way `prd-ticket-coverage` / `prd-ba
 |---|---|---|
 | `github.com/<org>/<repo>/issues/<n>` or `<org>/<repo>#<n>` | **GitHub Issues** | `gh` CLI (Lisa uses the CLI exclusively for GitHub — no GitHub MCP) |
 | `linear.app/...` | **Linear** | `lisa-linear-access operation: get-project` / `lisa-linear-access operation: get-issue` |
-| `notion.so` / `notion.site` | **Notion** | `mcp__claude_ai_Notion__notion-fetch` (`include_discussions: true`) |
-| `*.atlassian.net/wiki/...` | **Confluence** | `mcp__atlassian__getConfluencePage` (+ descendants) |
-| JIRA issue key (e.g. `PROJ-123`) or `*.atlassian.net/browse/...` | **JIRA** | `mcp__atlassian__getJiraIssue` |
+| `notion.so` / `notion.site` | **Notion** | `lisa-notion-access` — fetch the page **with its discussions** |
+| `*.atlassian.net/wiki/...` | **Confluence** | `lisa-atlassian-access` — read the page and its descendants |
+| JIRA issue key (e.g. `PROJ-123`) or `*.atlassian.net/browse/...` | **JIRA** | `lisa-atlassian-access` — read the issue (and JQL-search when resolving a set) |
+
+State the operation you need, never a vendor tool name: the access skills own substrate selection, and a hardcoded MCP tool name is not portable. The same server registers under different prefixes depending on install path (`mcp__atlassian__*`, `mcp__claude_ai_Atlassian__*`, `mcp__plugin_atlassian_atlassian__*`), and its data tools register only once OAuth completes — so a named tool fails outright in a context that has the CLI or token substrate available and would otherwise have worked. See the `integration-access-layer` rule.
 
 Read the PRD body via the vendor-appropriate surface. The vendor that owns the PRD source is what Phase 2 reads the child set from; it is independent of which tracker hosts the generated tickets (a Notion PRD can own JIRA tickets — the cross-vendor case is handled by the documented generated-work section in Phase 2).
 
@@ -70,7 +72,7 @@ If neither source yields any generated top-level child (the PRD generated nothin
 Apply the **per-vendor terminal-state predicate from the `prd-lifecycle-rollup` rule** to every generated **top-level** work item (cite the rule by slug — do not restate its predicate table here). In summary, a top-level child is:
 
 - **Terminal** — it has reached its source/tracker's done/shipped state (GitHub: closed + the resolved build `done` role label where used; Linear: a `done`-category completed state; JIRA: `statusCategory.key == "done"`; Notion/Confluence: the documented generated-work entry marked done). A generated Epic is terminal only when *it* has rolled up to its own terminal state per `leaf-only-lifecycle` — read the child's own resolved state; do not re-derive it from its leaves.
-- **Terminal-but-dropped** — closed-as-not-planned (GitHub `stateReason == "not_planned"`) / canceled (Linear) / won't-do. It does **not** hold the PRD open and is excluded from the required set.
+- **Terminal-but-dropped** — closed-as-not-planned (GitHub `stateReason == "not_planned"`) / canceled or duplicate (Linear — both are terminal `state.type`s; `duplicate` is distinct from `canceled`) / won't-do. It does **not** hold the PRD open and is excluded from the required set.
 - **Incomplete / blocked** — anything else (still open, or closed without the `done` role). It holds the PRD open.
 
 The **required** set is the top-level children minus the terminal-but-dropped ones. Branch:

@@ -1,4 +1,4 @@
 display_name: "Confluence Write PRD"
-short_description: "Creates or idempotently updates a PRD as a Confluence page parented under the configured lifecycle parent page (the draft parent by…"
+short_description: "Creates or idempotently updates…"
 default_prompt:
-  - "Use $lisa-confluence-write-prd: Creates or idempotently updates a PRD as a Confluence page parented under the configured lifecycle parent page (the draft parent by…."
+  - "Use $lisa-confluence-write-prd: Creates or idempotently updates…."

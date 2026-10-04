@@ -1,0 +1,42 @@
+# Seeded by Lisa on first setup — this file is YOURS.
+# Lisa will not overwrite it. (copy-overwrite assets ARE replaced each run.)
+name: 🧩 Reusable Workflow Load Sweep
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  sweep:
+    name: 🧩 Scan run history for load failures
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.23.3'
+          package-manager-cache: false
+      # Keep this a local script: the detector must run when an upstream
+      # reusable workflow cannot load. It needs Node and gh, with no dependencies.
+      - name: Scan recent workflow runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/check-workflow-load-failures.mjs > workflow-load-report.txt 2>&1
+      - name: Publish the scan report
+        if: always()
+        run: |
+          {
+            echo '## Reusable workflow load scan'
+            echo '```text'
+            cat workflow-load-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

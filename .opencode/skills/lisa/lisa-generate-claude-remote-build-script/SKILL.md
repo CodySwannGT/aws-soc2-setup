@@ -1,14 +1,15 @@
 ---
 name: lisa-generate-claude-remote-build-script
-description: "Generate the setup/build script (and env-var template) to paste into a Claude Code remote routine environment so this repo runs in the cloud. Runs /lisa:analyze-claude-remote to inventory needs, then writes an idempotent, detect-before-install bash script that installs the required CLIs/binaries and package manager for both Lisa and the host project, plus a commented environment-variable template (names only, never real secrets) and a list of custom domains to allowlist. The script is fast (fits the ~5-minute environment-cache budget), re-runnable, and cloud-proxy aware."
+description: "Generate the setup/build script…"
 allowed-tools: ["Skill", "Bash", "Read", "Write", "Glob", "Grep"]
 ---
 
 # Generate Claude Remote Build Script: $ARGUMENTS
 
 Produce the artifacts a user pastes into a **Claude Code remote routine environment** so this repo
-runs in the cloud: a setup/build script that installs everything the environment needs, plus an
-environment-variable template and a network-allowlist list.
+runs in the cloud: a setup/build script that installs everything the environment needs, an
+environment-variable template, a network-allowlist list, and the names-only
+`.lisa/remote-environment.json` contract consumed by `lisa ui`.
 
 ## Purpose
 
@@ -68,12 +69,12 @@ tracker/source, plus the host project's own package manager and tooling — not 
    sibling repos reachable through the routine's GitHub proxy.
    For OPTIONAL non-tracker MCP recovery entries discovered by
    `/lisa:analyze-claude-remote`, preserve the same names-only behavior:
-   include `JAM_PAT`, `SONAR_TOKEN`, or similar documented substrate env vars
-   only as optional secrets, with their acquire/scope comments when the analysis
-   supplied them. Never invent values or promote dormant substrates to required.
-   When AWS entries are present, list `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional
-   `AWS_SESSION_TOKEN`, and `AWS_DEFAULT_REGION` exactly as the analysis reported. State that these
-   bootstrap credentials are for STS assume-role only; do not emit or recommend `aws sso login`.
+   include `JAM_PAT`, `SONARQUBE_CLI_TOKEN` (+ `SONARQUBE_CLI_ORG`/`SONARQUBE_CLI_SERVER`), or
+   similar documented substrate env vars only as optional secrets, with their
+   acquire/scope comments when the analysis supplied them. Never invent values or promote dormant substrates to required.
+   When AWS entries are present, list only `LISA_AWS_BOOTSTRAP_JSON` as the
+   required secret and `LISA_REMOTE_AGENT=claude` as plain configuration. Never
+   emit standard `AWS_ACCESS_KEY_ID` variables and never recommend `aws sso login`.
 
 3a. **Emit substrate setup snippets.** When the inventory marks an MCP
    `headlessUsable: true` through a documented substrate, render the matching
@@ -83,26 +84,38 @@ tracker/source, plus the host project's own package manager and tooling — not 
      `export PATH="$HOME/.local/bin:$PATH"`, `printf '%s' "$JAM_PAT" | jam auth login --token`,
      and `jam skills install`, all inside `[ -n "${JAM_PAT:-}" ] && ...` guards so missing
      optional secrets do not fail the environment build.
-   - REST substitute substrates: do not install an MCP. Emit comments naming the
-     REST host and env var (for example `SONAR_TOKEN` with `https://sonarcloud.io/api/`) and
-     rely on the access skill or generated consumer to call the API.
+   - Container-backed MCP substrates (e.g. the official SonarQube MCP): the MCP
+     runs headless as-is in a cloud routine — Docker is preinstalled — so wire the
+     real MCP rather than substituting REST. Emit, guarded on the optional env
+     token, the vendor CLI install (`curl -o- https://raw.githubusercontent.com/SonarSource/sonarqube-cli/refs/heads/master/user-scripts/install.sh | bash`),
+     `sonar integrate <agent>`, and a `sonar run mcp`-image pre-pull so the first
+     run fits the ~5-min cache budget. Provide `SONARQUBE_CLI_TOKEN`
+     (+ `SONARQUBE_CLI_ORG`/`SONARQUBE_CLI_SERVER`); never emit `sonar auth login` (keychain
+     does not exist headless).
+   - REST-only substitute substrates: for a vendor whose MCP genuinely cannot run
+     headless, do not install an MCP — emit comments naming the REST host and env
+     var, and rely on the access skill or generated consumer to call the API.
    - PAT-bearer MCP substrates: print a commented `.mcp.json` `headers` snippet from the
      inventory's `mcpHeaders`. Use this only when the analysis explicitly says the same MCP
      transport supports static-token auth. Do not print a Jam `.mcp.json` header snippet because
      Jam's preferred headless substrate is its PAT-authenticated CLI.
 
-3b. **Emit AWS assume-role profile setup.** When the inventory includes `awsProfiles`, write an
-   idempotent `~/.aws/config` block gated on `[ -n "${AWS_ACCESS_KEY_ID:-}" ]`. The generated block
-   must:
-   - `mkdir -p "$HOME/.aws"` and create or append profile stanzas without writing secrets.
-   - Emit one `[profile <name>]` stanza per inventory profile with `role_arn`,
-     `credential_source = Environment`, `region` when present, and `external_id` when present.
-   - Keep regions and ExternalIds as non-secret project metadata from the inventory; never invent
-     account IDs, role names, profile names, regions, or ExternalIds.
-   - Warn and skip profile writing when AWS profile metadata is absent, while still listing the
-     required `AWS_*` env var names in the secret template.
-   - Include a comment that agents should use `aws --profile <name> ...` and must not run
-     `aws sso login` in headless routines.
+3b. **Install the shared AWS bootstrap.** When AWS is present, invoke
+   `/lisa:setup-remote-aws --platform=claude`. Reuse the resulting
+   `scripts/remote-agent-aws-setup.sh`; do not generate a second credential or
+   profile implementation. Add `bash scripts/remote-agent-aws-setup.sh` to the
+   generated cloud setup after required package installation.
+
+3c. **Write the project-aware console contract.** Write
+   `.lisa/remote-environment.json` from the same fresh inventory. Its `variables`
+   array must contain only entries that are `required: true` for this project and
+   its active integrations; omit optional, conditional, and dormant integrations.
+   Each entry contains `name`, `reason`, `source`, `secret`, and `required`, but
+   never a value. Set `startupScripts.claude` to the generated `--out` path. Do
+   not add AWS merely because Lisa ships AWS support: add
+   `LISA_AWS_BOOTSTRAP_JSON` only when the inventory reports active AWS usage.
+   Preserve any valid startup-script entries for other agents that already exist
+   in the manifest.
 
 4. **Emit the allowlist + gaps notice.** List any custom domains the setup or runtime reaches
    (from `networkAccess.allowlistDomains`, falling back to legacy `allowlistDomains`) that the user
@@ -113,10 +126,13 @@ tracker/source, plus the host project's own package manager and tooling — not 
    **cannot** fix.
 
 5. **Write and report.** Write the script to `--out` (default `scripts/claude-remote-setup.sh`),
-   `chmod +x` it, and print: the path, a one-line summary of what it installs and which env vars to
-   set, and the exact next step (paste its contents — or a `bash scripts/claude-remote-setup.sh`
-   invocation — into the routine environment's setup script, and add the env vars in the
-   environment config). When `--print` is passed, print to stdout and do not write a file.
+   `chmod +x` it, and write `.lisa/remote-environment.json`. Print both paths, a
+   one-line summary of what the script installs and which env vars to set, and
+   the exact next step (paste its contents — or a
+   `bash scripts/claude-remote-setup.sh` invocation — into the routine
+   environment's setup script, and add the env vars in the environment config).
+   When `--print` is passed, print the script to stdout and do not write either
+   file.
 
 ## Generated script shape
 
@@ -139,9 +155,9 @@ shape, not a fixed payload):
 #   # Note: GH_TOKEN is for gh CLI only. Raw git uses Claude's connected-GitHub proxy/identity;
 #   # sibling repos reached only by raw git do not need to be in this token scope.
 #   - GH_TOKEN=<token>                          # REQUIRED, github is the active tracker+source
-#   - AWS_ACCESS_KEY_ID=<access-key-id>          # REQUIRED when AWS inventory is active
-#   - AWS_SECRET_ACCESS_KEY=<secret-access-key>  # REQUIRED when AWS inventory is active
-#   - AWS_SESSION_TOKEN=<session-token>          # OPTIONAL for temporary bootstrap creds
+#   - LISA_AWS_BOOTSTRAP_JSON=<complete SecretString> # REQUIRED for AWS
+# PLAIN:
+#   - LISA_REMOTE_AGENT=claude
 # NETWORK: set the environment to Custom and allowlist these non-default domains if not on Full:
 #   - <networkAccess.allowlistDomains, if any>
 set -uo pipefail
@@ -153,7 +169,7 @@ require() { need "$1" || { echo "FATAL: required tool '$1' missing and install f
 # Resolve the PM from packageManager/engines/lockfiles — emit the manager the
 # `packageManager` inventory field reported, NEVER a hardcoded bun. An npm-only
 # project (engines.bun = "please-use-npm") must install with npm; emitting
-# `bun install` would create a stray bun.lock and break it (the SE-5221
+# `bun install` would create a stray bun.lock and break it (the package-manager selection
 # regression). Only install/PATH-export the manager actually selected below.
 detect_package_manager() {
   _field="" _forced="" _forbidden=""
@@ -184,13 +200,8 @@ need gh || (sudo apt-get update -y && sudo apt-get install -y gh)
 need jq || sudo apt-get install -y jq
 require gh; require jq
 
-# --- AWS assume-role profiles, when inventory includes awsProfiles ---
-if [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then
-  mkdir -p "$HOME/.aws"
-  # Generated stanzas use credential_source=Environment and contain no secrets.
-  # Agents should run: aws --profile <profile> ...
-  # Do not run aws sso login in headless routines; SSO requires an interactive browser/device flow.
-fi
+# --- AWS assume-role profiles, when AWS inventory is active ---
+bash scripts/remote-agent-aws-setup.sh
 
 # --- optional, only with --include-optional ---
 # (docker / ruby / chromium / etc., guarded)
@@ -204,8 +215,8 @@ to stop are: the analysis could not run, or the `--out` path is not writable.
 
 ## Rules
 
-- Always derive the script from a fresh `/lisa:analyze-claude-remote` run — never from a stale or
-  assumed inventory.
+- Always derive the script and `.lisa/remote-environment.json` from a fresh
+  `/lisa:analyze-claude-remote` run — never from a stale or assumed inventory.
 - Never write real secret values into the script or template — names and placeholders only.
 - For active tracker/source credentials, carry the analysis's `Acquire:` URL and `Access:` scope into
   the template as comments, and emit only the env-var form of the name — never a keychain command.
@@ -213,8 +224,8 @@ to stop are: the analysis could not run, or the `--out` path is not writable.
   raw git/cross-repo clone guidance must not expand the token scope to sibling repositories.
 - Never emit an install for a tool the analysis did not surface, and never install `OPTIONAL` tools
   unless `--include-optional` is set.
-- When AWS is in the inventory, generate environment-backed assume-role profile stanzas from
-  `awsProfiles`; never emit `aws sso login` as a remote setup step.
+- When AWS is in the inventory, reuse `/lisa:setup-remote-aws` and its shared
+  setup script; never emit a second profile implementation or `aws sso login`.
 - Prefer `networkAccess.allowlistDomains` over legacy top-level `allowlistDomains`; never emit
   domains already covered by the routine environment's default Trusted list.
 - Keep the script idempotent and detect-before-install so it is safe to re-run and cache.

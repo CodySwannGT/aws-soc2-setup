@@ -1,24 +1,58 @@
 # BEGIN: AI GUARDRAILS 
-# Detect package manager (check if tool is available before using it)
-# Priority: bun > yarn > npm (bun first since package.json engines prefer it)
-if ([ -f "bun.lockb" ] || [ -f "bun.lock" ]) && command -v bun >/dev/null 2>&1; then
-  PACKAGE_MANAGER="bun"
-  RUNNER="bun run"
-  EXECUTOR="bunx"
-elif [ -f "yarn.lock" ] && command -v yarn >/dev/null 2>&1; then
-  PACKAGE_MANAGER="yarn"
-  RUNNER="yarn"
-  EXECUTOR="yarn"
-elif [ -f "package-lock.json" ]; then
+# --- lisa:pm-detect ---
+# Detect the package manager this project wants, honoring explicit opt-outs.
+# Precedence: packageManager field > engines "please-use-<pm>" sentinel >
+# lockfile presence (minus any PM the engines forbid) > npm default.
+#
+# The order this replaced claimed to come from `package.json` engines and never
+# read them. Two things were wrong with that. It keyed on lockfile presence
+# ALONE, which is the one thing this product's own installer hook says it must
+# not do: an npm-only project (engines.bun = "please-use-npm", CI runs
+# `npm ci`) that picks up a stray bun.lock gets bun here and npm there, so two
+# Lisa components in one repository disagree about which manager runs the
+# gates. And the justification described LISA's package.json, copied verbatim
+# into repositories whose engines say something else entirely.
+#
+# `pnpm` was absent from the chain, so a pnpm project matched no branch and
+# fell through to npm. Seven sibling detectors in this product already know
+# `pnpm-lock.yaml`; this family was the only one that did not.
+#
+# Kept in step with `install-pkgs.sh`, deliberately: the two must agree, and
+# the failure mode of drift is silent disagreement rather than an error.
+lisa_detect_pm() {
+  _field="" _forced="" _forbidden=""
+  if [ -f package.json ] && command -v jq >/dev/null 2>&1; then
+    _field=$(jq -r '(.packageManager // "") | sub("@.*$";"")' package.json 2>/dev/null)
+    _forced=$(jq -r 'first((.engines // {})[] | strings | capture("please-use-(?<pm>bun|npm|yarn|pnpm)")?.pm) // ""' package.json 2>/dev/null)
+    _forbidden=$(jq -r '[(.engines // {}) | to_entries[] | select(((.value|strings) // "") | test("please-use|do-not-use";"i")) | .key] | join(" ")' package.json 2>/dev/null)
+  fi
+  case "$_field" in bun | npm | yarn | pnpm) printf '%s\n' "$_field"; return 0 ;; esac
+  case "$_forced" in bun | npm | yarn | pnpm) printf '%s\n' "$_forced"; return 0 ;; esac
+  _pm_allowed() { case " $_forbidden " in *" $1 "*) return 1 ;; *) return 0 ;; esac; }
+  if { [ -f bun.lockb ] || [ -f bun.lock ]; } && _pm_allowed bun; then printf 'bun\n'; return 0; fi
+  if [ -f pnpm-lock.yaml ] && _pm_allowed pnpm; then printf 'pnpm\n'; return 0; fi
+  if [ -f yarn.lock ] && _pm_allowed yarn; then printf 'yarn\n'; return 0; fi
+  if [ -f package-lock.json ] && _pm_allowed npm; then printf 'npm\n'; return 0; fi
+  printf 'npm\n'
+}
+
+PACKAGE_MANAGER="$(lisa_detect_pm)"
+# A manager that is not installed is NAMED, never silently swapped. The branch
+# this replaced answered "npm" for three different inputs — a pnpm project, a
+# bun project on a machine without bun, a yarn project without yarn — and
+# printed that answer as a detection. A confident wrong tool at commit time
+# costs more than a named fallback.
+if ! command -v "$PACKAGE_MANAGER" >/dev/null 2>&1; then
+  echo "⚠️  $PACKAGE_MANAGER is this project's package manager but is not on PATH; running gates with npm instead."
   PACKAGE_MANAGER="npm"
-  RUNNER="npm run"
-  EXECUTOR="npx"
-else
-  # Default to npm if no lock file is found or tool is not available
-  PACKAGE_MANAGER="npm"
-  RUNNER="npm run"
-  EXECUTOR="npx"
 fi
+case "$PACKAGE_MANAGER" in
+  bun) RUNNER="bun run"; EXECUTOR="bunx" ;;
+  pnpm) RUNNER="pnpm run"; EXECUTOR="pnpm exec" ;;
+  yarn) RUNNER="yarn"; EXECUTOR="yarn" ;;
+  *) RUNNER="npm run"; EXECUTOR="npx" ;;
+esac
+# --- end lisa:pm-detect ---
 
 echo "📦 Using package manager: $PACKAGE_MANAGER"
 
@@ -43,15 +77,222 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------------------
+# lint-staged preflight.
+#
+# lint-staged reports exit 0 when a task's executable cannot be SPAWNED.
+# Measured on lint-staged 16.4.0 and 17.3.0: a file that is present and
+# `chmod +x` but is not a runnable executable prints "[FAILED] spawn ENOEXEC"
+# and the run still exits 0. An absent executable (ENOENT) and an ordinary
+# non-zero exit both fail closed — only the spawn error does not.
+#
+# That state is not exotic. A tool whose real binary is materialized during
+# `postinstall` leaves a shebang-less placeholder behind on any install that
+# skips scripts, and lint-staged spawns without a shell, so the kernel refuses
+# the file before the placeholder's own `exit 1` can run. The staged-file scan
+# then runs, reports nothing, blocks nothing, and the commit proceeds.
+#
+# No exit-code check can catch this — not the one below, not any other. A
+# process reporting 0 for work it did not do defeats every test of its status.
+# So the tools are proved runnable BEFORE any of them is handed the work, by
+# something that spawns them itself and reports what it spawned.
+#
+# OUTSIDE the gate-registry handover, deliberately. lint-staged runs at this
+# moment by BOTH routes: the built-in step further down, and a `code-style`
+# gate whose declared command is the project's lint-staged script. A preflight
+# placed inside the built-in branch would stand down for exactly the projects
+# whose registry then runs lint-staged anyway. The tools are the same either
+# way, so the proof belongs before both.
+#
+# Skipped only when the project has no lint-staged config, in which case no
+# route runs lint-staged and there is nothing to prove. A preflight that cannot
+# RUN is not a skip and not a pass — it blocks.
+# ---------------------------------------------------------------------------
+if [ -f ".lintstagedrc.json" ]; then
+  LINT_STAGED_PREFLIGHT="node_modules/@codyswann/lisa/all/copy-overwrite/scripts/lisa-lint-staged-preflight.mjs"
+  if [ ! -f "$LINT_STAGED_PREFLIGHT" ]; then
+    LINT_STAGED_PREFLIGHT="scripts/lisa-lint-staged-preflight.mjs"
+  fi
+  if [ ! -f "$LINT_STAGED_PREFLIGHT" ]; then
+    LINT_STAGED_PREFLIGHT="all/copy-overwrite/scripts/lisa-lint-staged-preflight.mjs"
+  fi
+  if command -v node >/dev/null 2>&1; then
+    LINT_STAGED_PREFLIGHT_RUNTIME="node"
+  elif command -v bun >/dev/null 2>&1; then
+    LINT_STAGED_PREFLIGHT_RUNTIME="bun"
+  else
+    LINT_STAGED_PREFLIGHT_RUNTIME=""
+  fi
+  if [ ! -f "$LINT_STAGED_PREFLIGHT" ] || [ -z "$LINT_STAGED_PREFLIGHT_RUNTIME" ]; then
+    echo ""
+    echo "❌ Commit blocked: the lint-staged preflight could not run."
+    echo "   Expected $LINT_STAGED_PREFLIGHT, and node or bun on PATH."
+    echo "   Without it a tool that is installed but not executable makes"
+    echo "   lint-staged exit 0 having scanned nothing, so skipping the"
+    echo "   preflight cannot be treated as a pass."
+    echo "   Reinstall dependencies, then re-run \`lisa apply\`."
+    echo ""
+    exit 1
+  fi
+  "$LINT_STAGED_PREFLIGHT_RUNTIME" "$LINT_STAGED_PREFLIGHT" --config .lintstagedrc.json
+  LINT_STAGED_PREFLIGHT_STATUS=$?
+  if [ $LINT_STAGED_PREFLIGHT_STATUS -ne 0 ]; then
+    exit $LINT_STAGED_PREFLIGHT_STATUS
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Cross-worktree staged-blob guard.
+#
+# Refuses a commit that stages a NEW file byte-identical to uncommitted work
+# sitting in a different linked worktree. Where several agents share one
+# repository through worktrees, one agent's in-progress file can be committed
+# by another: the file is real, the branch is real, the commit succeeds and
+# every other gate passes, so nothing reports it. Confirmed once — a 284-line
+# test file staged in one worktree, committed an hour later from elsewhere,
+# byte-identical, under a reworded subject.
+#
+# HERE RATHER THAN IN THE GATE REGISTRY, deliberately. This is a property of
+# the machine — which other worktrees exist and what is sitting in them —
+# not of the project, so there is no task a project could declare to prove it.
+# It also has to run on EVERY commit: the whole failure mode is that nobody
+# notices, so a check that waits to be invoked is a check that was not running
+# on the commit where it mattered.
+#
+# Fails OPEN when the script is missing, unlike the lint-staged preflight
+# above. That preflight guards a tool that reports success for work it did not
+# do, so skipping it cannot be read as a pass. This one only ever adds a
+# refusal — a repository without it is exactly as safe as it was before the
+# guard existed, and blocking every commit in a project that has not yet
+# re-applied templates would be a worse trade than the window it closes.
+# ---------------------------------------------------------------------------
+CROSS_WORKTREE_GUARD="node_modules/@codyswann/lisa/all/copy-overwrite/scripts/lisa-cross-worktree-guard.mjs"
+if [ ! -f "$CROSS_WORKTREE_GUARD" ]; then
+  CROSS_WORKTREE_GUARD="scripts/lisa-cross-worktree-guard.mjs"
+fi
+if [ ! -f "$CROSS_WORKTREE_GUARD" ]; then
+  CROSS_WORKTREE_GUARD="all/copy-overwrite/scripts/lisa-cross-worktree-guard.mjs"
+fi
+if [ -f "$CROSS_WORKTREE_GUARD" ] && command -v node >/dev/null 2>&1; then
+  node "$CROSS_WORKTREE_GUARD"
+  CROSS_WORKTREE_GUARD_STATUS=$?
+  if [ $CROSS_WORKTREE_GUARD_STATUS -ne 0 ]; then
+    exit $CROSS_WORKTREE_GUARD_STATUS
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Gate-driven checks.
+#
+# A gate is a PROPERTY the project must hold; `.lisa.config.json` names the task
+# that proves it. `gitleaks` is not a gate — credential leakage is, and gitleaks
+# is one way to prove it. When a `gates` block exists, that registry decides
+# what runs at the `commit` moment, not the hardcoded list further down.
+#
+# BACKWARD COMPATIBILITY — read before changing any of this. Most installed
+# projects have NO `gates` block. The exit codes are the switch:
+#
+#   exit 0  → the declared gates at this moment ran and none of them blocked.
+#   exit 1  → a required gate FAILED. Block the commit.
+#   exit 78 → there is no `gates` block at all. Nothing is covered.
+#   other   → the runner itself could not run (config unreadable, crash).
+#             Nothing was proved. Say so loudly and cover nothing.
+#
+# ONE STEP AT A TIME, NOT ALL OR NOTHING. Exit 0 says the declared gates
+# passed. It does not say the registry covers every property the steps below
+# prove — so it cannot be the thing that skips them wholesale. A block that
+# declares `code-style` and says nothing about `credential-leakage` would then
+# delete the secret scan by omission, which is the failure this whole subsystem
+# exists to prevent: a control returning success for an input it never
+# examined.
+#
+# So the runner writes the properties it covers into $LISA_GATE_COVERAGE, one
+# gate id per line, and every built-in step below stands down only against its
+# OWN property. A half-declared block therefore loses nothing: the registry
+# runs what it declares and the built-ins run the rest.
+#
+# Fail-safe by construction: no coverage file, an empty one, a runner that
+# could not run, or no exact match, all mean the built-in step runs.
+# ---------------------------------------------------------------------------
+GATE_RUNNER="node_modules/@codyswann/lisa/all/copy-overwrite/scripts/lisa-run-gates.mjs"
+if [ ! -f "$GATE_RUNNER" ]; then
+  GATE_RUNNER="scripts/lisa-run-gates.mjs"
+fi
+if [ ! -f "$GATE_RUNNER" ]; then
+  GATE_RUNNER="all/copy-overwrite/scripts/lisa-run-gates.mjs"
+fi
+LISA_GATE_COVERAGE=""
+if [ -f "$GATE_RUNNER" ] && command -v node >/dev/null 2>&1; then
+  LISA_GATE_COVERAGE="$(mktemp "${TMPDIR:-/tmp}/lisa-gate-coverage.XXXXXXXX")" || LISA_GATE_COVERAGE=""
+  trap 'rm -f "$LISA_GATE_COVERAGE"' EXIT
+  if [ -n "$LISA_GATE_COVERAGE" ]; then
+    node "$GATE_RUNNER" --moment=commit --coverage="$LISA_GATE_COVERAGE"
+  else
+    # No temp file, so nothing can be covered and every built-in step runs.
+    node "$GATE_RUNNER" --moment=commit
+  fi
+  GATE_STATUS=$?
+  if [ $GATE_STATUS -eq 1 ]; then
+    echo ""
+    echo "❌ Commit blocked: a required gate failed. See the FAILED line above."
+    echo ""
+    exit 1
+  fi
+  if [ $GATE_STATUS -ne 0 ]; then
+    # Anything other than a clean run: discard whatever is in the file. A
+    # runner that crashed midway may have written coverage before it failed,
+    # and coverage from a run that did not finish is not evidence.
+    if [ -n "$LISA_GATE_COVERAGE" ]; then
+      : > "$LISA_GATE_COVERAGE"
+    fi
+    if [ $GATE_STATUS -ne 78 ]; then
+      echo ""
+      echo "⚠️  The gate runner could not run (exit $GATE_STATUS)."
+      echo "   Nothing was proved by the gate registry — this is NOT a pass."
+      echo "   Running the built-in checks instead."
+      echo ""
+    fi
+  fi
+else
+  echo "ℹ️  Gate runner unavailable; running the built-in checks."
+fi
+
+# Whether a declared gate covers every property named, so the built-in step
+# that proves them can stand down. Exact whole-line matching: a gate id that is
+# a prefix of another must never satisfy it.
+lisa_gate_covers() {
+  [ -n "$LISA_GATE_COVERAGE" ] || return 1
+  [ -s "$LISA_GATE_COVERAGE" ] || return 1
+  for _lisa_gate in "$@"; do
+    grep -Fqx -- "$_lisa_gate" "$LISA_GATE_COVERAGE" || return 1
+  done
+  return 0
+}
+
+# BEGIN: built-in checks — the pre-registry path, kept step for step so a
+# project without a `gates` block behaves exactly as it did before.
+
 # Check for Gitleaks and run secret detection
 echo "🔐 Checking for secrets with Gitleaks..."
-if command -v gitleaks >/dev/null 2>&1; then
+if lisa_gate_covers credential-leakage; then
+  echo "ℹ️  Covered by the credential-leakage gate; the built-in scan stands down."
+elif command -v gitleaks >/dev/null 2>&1; then
   # Run gitleaks on staged files. Lisa keeps the host-owned allowlist in
   # .gitleaksignore and shared managed entries in .gitleaksignore.local.
   GITLEAKS_IGNORE_ARGS=""
   GITLEAKS_COMBINED_IGNORE=""
   if [ -f ".gitleaksignore.local" ]; then
-    GITLEAKS_COMBINED_IGNORE="$(mktemp)"
+    # Explicit template with a trailing X run keeps this portable: BSD/macOS
+    # `mktemp` requires a template argument (bare `mktemp` errors), while GNU
+    # `mktemp` accepts it too.
+    # This hook does not run under `set -e`, so an unguarded failure would leave
+    # the path empty and hand gitleaks a malformed --gitleaks-ignore-path=.
+    # Fail closed instead: a degraded secret scan is worse than a blocked commit.
+    if ! GITLEAKS_COMBINED_IGNORE="$(mktemp "${TMPDIR:-/tmp}/gitleaks-ignore.XXXXXXXX")" || [ -z "$GITLEAKS_COMBINED_IGNORE" ]; then
+      echo "❌ Failed to create the temporary Gitleaks ignore file." >&2
+      echo "   Check that TMPDIR (${TMPDIR:-/tmp}) exists and is writable." >&2
+      exit 1
+    fi
     if [ -f ".gitleaksignore" ]; then
       cat .gitleaksignore > "$GITLEAKS_COMBINED_IGNORE"
       printf '\n' >> "$GITLEAKS_COMBINED_IGNORE"
@@ -76,20 +317,24 @@ if command -v gitleaks >/dev/null 2>&1; then
   fi
   echo "✅ No secrets detected"
 else
+  # Blocks rather than warns. This branch used to print the warning below and
+  # continue with exit 0, which made "gitleaks is not installed" and "no
+  # secrets were found" the same observable: a green commit. A credential scan
+  # that cannot run has not cleared the commit, and the lint-staged preflight
+  # further down already states the rule this branch was breaking — a check
+  # that cannot RUN is not a skip and not a pass.
   echo ""
-  echo "⚠️  WARNING: Gitleaks is not installed!"
+  echo "❌ Commit blocked: Gitleaks is required and is not installed."
   echo ""
-  echo "Gitleaks helps prevent secrets from being committed to your repository."
+  echo "Gitleaks is what stops secrets reaching this repository's history, and"
+  echo "without it this hook cannot tell a clean commit from an unscanned one."
   echo ""
   echo "To install Gitleaks:"
   echo "  macOS:    brew install gitleaks"
   echo "  Windows:  scoop install gitleaks  # or choco install gitleaks"
   echo "  Linux:    See https://github.com/gitleaks/gitleaks#installing"
   echo ""
-  echo "After installation, your commits will be automatically scanned for secrets."
-  echo ""
-  echo "Continuing without secret scanning..."
-  echo ""
+  exit 1
 fi
 
 # Check if native changes require runtime version bump
@@ -99,15 +344,59 @@ fi
 #   exit 1
 # fi
 
-# Run type check on entire project (can't be done incrementally)
-echo "🔍 Running type check..."
-$RUNNER typecheck
-if [ $? -ne 0 ]; then
-  echo "❌ Type check failed. Please fix TypeScript errors before committing."
-  exit 1
+# Run lint-staged for incremental lint and format checks. It proves three
+# properties in one pass — oxlint/eslint, prettier, and `ast-grep scan` — so it
+# stands down only when a gate is declared for every one of them.
+if lisa_gate_covers code-style format-conformance structural-rules; then
+  echo "ℹ️  Lint, format and structural rules are covered by gates; lint-staged stands down."
+else
+  echo "🚀 Running lint-staged..."
+  $EXECUTOR lint-staged --config .lintstagedrc.json
+  LINT_STAGED_STATUS=$?
+  if [ $LINT_STAGED_STATUS -ne 0 ]; then
+    exit $LINT_STAGED_STATUS
+  fi
 fi
 
-# Run lint-staged for incremental lint and format checks
-echo "🚀 Running lint-staged..."
-$EXECUTOR lint-staged --config .lintstagedrc.json
+# Generated artifacts must vouch for the bytes committed beside them. Runs AFTER
+# lint-staged on purpose: reformatting a staged template moves its bytes, so a
+# check placed above would sign off on bytes that no longer exist. Absent in host
+# projects, which have the hook but none of Lisa's generators.
+if lisa_gate_covers artifact-freshness; then
+  echo "ℹ️  Covered by the artifact-freshness gate; the built-in check stands down."
+elif [ -f "scripts/check-derived-artifacts.mjs" ] && command -v node >/dev/null 2>&1; then
+  echo "🧾 Checking generated artifacts..."
+  node scripts/check-derived-artifacts.mjs --staged
+  if [ $? -ne 0 ]; then
+    exit 1
+  fi
+fi
+
+# END: built-in checks
+
+# Threshold ratchet: quality thresholds may tighten, never weaken. The staged
+# change is compared against HEAD by the same deterministic comparator the
+# agent-time hooks and CI run; human-approved exceptions live in
+# .lisa.config.json under thresholdRatchet.allow.
+#
+# OUTSIDE the gate-registry handover, deliberately. Every other built-in step
+# here has a registry gate that can replace it, so the runner refuses to take
+# the moment until the block declares one — see BUILTIN_FLOOR and
+# CONDITIONAL_FLOOR in lisa-run-gates.mjs. This one has no such counterpart:
+# `threshold-monotonicity` is push-onward and compares against HEAD^, while
+# this compares the STAGED change. Leaving it inside the handover would let a
+# complete gates block delete it at commit with nothing put in its place, which
+# is precisely the deletion-by-omission the floor exists to prevent.
+if [ -f "scripts/check-threshold-ratchet.mjs" ] && command -v node >/dev/null 2>&1; then
+  echo "📐 Checking threshold ratchet..."
+  node scripts/check-threshold-ratchet.mjs --staged
+  if [ $? -ne 0 ]; then
+    echo ""
+    echo "❌ A quality threshold was weakened. Thresholds may only tighten."
+    echo "   Fix the code to meet the current gate, or ask a human to record a"
+    echo "   documented exception in .lisa.config.json (thresholdRatchet.allow)."
+    echo ""
+    exit 1
+  fi
+fi
 # END: AI GUARDRAILS

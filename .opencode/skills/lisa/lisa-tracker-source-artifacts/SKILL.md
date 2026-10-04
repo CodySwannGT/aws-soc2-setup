@@ -1,6 +1,6 @@
 ---
 name: lisa-tracker-source-artifacts
-description: "Canonical, vendor-neutral taxonomy and rules for handling source artifacts (Figma, Lovable, Loom, screenshots, design docs, data samples) when generating or evaluating tracker tickets (JIRA, GitHub Issues, Linear). Defines: (1) artifact domains, (2) classification rules per tool, (3) source precedence (which artifact is authoritative for which question), (4) inheritance from epic to story to sub-task, (5) cross-axis conflict handling. Invoke this skill from any flow that extracts, attaches, or reasons about external design/UX/data artifacts so the rules don't drift across skills."
+description: "Canonical, vendor-neutral…"
 allowed-tools: []
 ---
 
@@ -92,6 +92,10 @@ Mocks define visual *intent*, not implementation shortcut. Every UI-touching tic
 > Before implementing, identify the closest existing component in the codebase. Prefer reuse even if the mock specifies different styling — flag the design-vs-code divergence as a discussion item on this ticket rather than pixel-matching from scratch.
 
 If no existing component fits, building a new one is an explicit decision that must be recorded in the ticket (with rationale) before implementation. Lovable-generated components are never the reuse target — always use the project's own components.
+
+Before adding the code-side obligation to ticket or teammate instructions, read `designSource.enabled` in `.lisa.config.json`. Only boolean `false` opts out: omit the design-source step; do not request DESIGN-SOURCE markers, Figma nodes, or Figma access for this obligation. Absent, true, or invalid values keep enforcement enabled. Preserve supplied artifacts and component-reuse requirements regardless; `design-value-binding` remains independent.
+
+When enabled, the divergence note above covers the **ticket** side of this event. The **code** side is governed by the `design-source-of-truth` rule: a UI surface built with no Figma source behind it is either synced back to Figma and annotated `DESIGN-SOURCE: <figma-url>`, or explicitly marked `DESIGN-SOURCE: none — not in Figma`, and review fails closed if neither happened. Cite the rule for the code obligation rather than restating it here — a ticket comment closes with the ticket, the annotation stays with the surface.
 
 ## 8. Preservation gate (run after creating tickets)
 

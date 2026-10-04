@@ -1,6 +1,6 @@
 ---
 name: lisa-analyze-claude-remote
-description: "Audit whether the current repository can run as a Claude Code remote routine (cloud session). Read-only analysis that inventories what Lisa AND the host project need to configure or build in the cloud environment — external CLIs/binaries to install, environment variables and secrets to set, startup hooks and their headless-safety, MCP server scope/transport/auth, user-scoped config and auto-memory gaps that don't replicate to the cloud, and platform constraints (bun proxy, IP allowlist, network tier, no interactivity). Reads `.lisa.config.json` `tracker`/`source` to determine which tracker/PRD-source integrations are active, resolves each to its headless-viable substrate (CLI/curl + token, never browser-OAuth MCP, never OS-keychain), and spells out the exact secret env vars, where to obtain each token, and the precise access scope required — without guessing. Emits grouped findings plus a machine-readable inventory that /lisa:generate-claude-remote-build-script consumes."
+description: "Audit whether the current…"
 allowed-tools: ["Skill", "Bash", "Read", "Glob", "Grep"]
 ---
 
@@ -28,7 +28,7 @@ This skill ships in the base Lisa plugin and is distributed to every host projec
 discover requirements **dynamically from the repo** rather than assuming Lisa-repo specifics. It
 audits two layers together:
 
-- **Lisa's needs** — startup hooks (`install-pkgs.sh`, `setup-jira-cli.sh`, rule injection),
+- **Lisa's needs** — startup hooks (`install-pkgs.sh`, `setup-jira-cli.sh` — tracker-gated, rule injection),
   the configured `tracker`/`source`, and the CLIs/MCP/env those imply.
 - **The host project's needs** — its own package manager, build/test tooling, app runtime
   dependencies, CI-assumed binaries, and project-scoped MCP servers.
@@ -71,7 +71,9 @@ Group the findings as:
    runs, whether it is headless-safe, whether it needs network or write access to system paths,
    and whether it fits the cloud setup-script time budget (~5 minutes for environment caching;
    `SessionStart` hooks re-run every session and must be fast). Lisa's `install-pkgs.sh` and
-   `setup-jira-cli.sh` are the usual headline items.
+   `setup-jira-cli.sh` are the usual headline items. Note that `setup-jira-cli.sh` is gated on
+   `tracker: "jira"` — on a project using another tracker it exits immediately and needs no
+   environment at all, so do not report its JIRA env vars as required there.
 
 3. **External CLIs / binaries** — scan hooks, `scripts/`, committed skills/commands, and
    `.github/workflows/` for invoked binaries that a base cloud image likely lacks. Assume node,
@@ -150,24 +152,27 @@ Group the findings as:
      Terraform providers).
    - `aws sso login`, `aws:signin:*`, `sso_start_url`, `sso_account_id`, `sso_role_name`, or
      `sso_session` in docs or config.
-   - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_DEFAULT_REGION`,
-     `AWS_PROFILE`, role ARN, external ID, account, or CloudWatch/STS references.
+   - `LISA_AWS_BOOTSTRAP_JSON`, legacy `AWS_ACCESS_KEY_ID` /
+     `AWS_SECRET_ACCESS_KEY`, `AWS_PROFILE`, role ARN, external ID, account, or
+     CloudWatch/STS references.
 
    If AWS is present, emit an AWS credential finding and inventory entry. If the repo's current
    local path is `aws sso login` or an `aws:signin:*` script, classify that local path as a `GAP`
    for headless remote routines: it is an interactive browser/device-authorization flow and cannot
    complete in the cloud. Route to the AWS row in the Credential reference instead of suggesting
-   SSO auth. The finding must name the headless substrate: a dedicated IAM principal (user or role)
-   with only permission to `sts:AssumeRole`, environment credentials in the routine UI, and
-   `~/.aws/config` profiles using `role_arn`, `credential_source = Environment`, optional
-   `external_id`, and `region`.
+   SSO auth. The finding must name Lisa's headless substrate: one dedicated IAM
+   user with only `sts:AssumeRole`; one complete Secrets Manager SecretString
+   set as `LISA_AWS_BOOTSTRAP_JSON`; and `/lisa:setup-remote-aws`, which writes a
+   named source profile plus automatically refreshed role profiles. Explicitly
+   reject standard `AWS_ACCESS_KEY_ID` variables because they can bypass the
+   intended assume-role profile.
 
    When the repository contains concrete non-secret AWS metadata (role ARNs, account aliases,
    profile names, regions, or ExternalId values), include it in an `awsProfiles` inventory array so
    `/lisa:generate-claude-remote-build-script` can write matching `~/.aws/config` profiles. Never
-   invent account IDs, ExternalIds, role names, or regions. If AWS is detected but profile metadata
-   is absent, emit the required AWS secret names plus an action to add project-specific profile
-   metadata to the generated artifact or environment notes.
+   invent account IDs, ExternalIds, role names, or regions. If AWS is detected
+   but profile metadata is absent, require a cdkstarter bootstrap bundle rather
+   than asking the repository to reconstruct account metadata by hand.
 
 5. **MCP servers** — read every committed `.mcp.json`. For each server report transport and auth.
    Project-scoped HTTP/SSE servers with no interactive auth are `OK`. Flag stdio servers as
@@ -192,7 +197,7 @@ Group the findings as:
    | Match | Substrate | Env | Setup / wiring | Domains |
    |---|---|---|---|---|
    | `mcp.jam.dev`, `jam`, or Jam MCP entries | Jam CLI (`jam`) authenticated by PAT | `JAM_PAT` | install with `curl -fsSL https://native.jam.dev/install | bash`; export `~/.local/bin`; run `printf '%s' "$JAM_PAT" | jam auth login --token`; optionally `jam skills install` | `native.jam.dev`, `api.jam.dev` |
-   | `mcp/sonarqube`, `sonarqube`, or SonarCloud/SonarQube MCP entries | SonarCloud Web API | `SONAR_TOKEN` | use REST calls against `https://sonarcloud.io/api/`; if a host needs legacy token-as-basic-auth, put that in the access adapter | `sonarcloud.io` |
+   | `mcp/sonarqube`, `sonarqube`, or SonarQube/SonarCloud MCP entries | Official SonarQube MCP (`sonar run mcp`), token-authed — runs headless as-is, no REST substitute | `SONARQUBE_CLI_TOKEN` (+ `SONARQUBE_CLI_ORG` for Cloud / `SONARQUBE_CLI_SERVER` for Server) | install the SonarQube CLI (`curl -o- https://raw.githubusercontent.com/SonarSource/sonarqube-cli/refs/heads/master/user-scripts/install.sh \| bash`) and `sonar integrate <agent>`; pre-pull the MCP container image in the setup script so it fits the cache budget; the MCP authenticates from the env token — never `sonar auth login` | `sonarcloud.io`, `sonarqube.us` (or the Server URL) |
 
    For PAT-bearer MCP substrates that really use the same MCP transport, include `mcpHeaders` in
    the inventory with a snippet such as `headers: { "Authorization": "Bearer ${VAR}" }` so the
@@ -253,7 +258,7 @@ unsuffixed `…_TOKEN`/`…_KEY` is the simplest to set in a single-account rout
 
 ### JIRA — `tracker: jira`
 - Headless substrate: `jira-cli` + curl (Basic auth). The acli and Atlassian-MCP tiers need prior interactive/OAuth auth → not viable headless.
-- Env: `JIRA_API_TOKEN`, `JIRA_SERVER` (e.g. `https://acme.atlassian.net`), `JIRA_LOGIN` (account email), `JIRA_PROJECT` (default project key); optional `JIRA_INSTALLATION` (default `cloud`), `JIRA_BOARD`. (`setup-jira-cli.sh` writes the jira-cli config from these on SessionStart.)
+- Env: `JIRA_API_TOKEN`, `JIRA_SERVER` (e.g. `https://acme.atlassian.net`), `JIRA_LOGIN` (account email), `JIRA_PROJECT` (default project key); optional `JIRA_INSTALLATION` (default `cloud`), `JIRA_BOARD`. (`setup-jira-cli.sh` writes the jira-cli config from these on SessionStart — but only when `.lisa.config*.json` sets `tracker: "jira"`; on any other tracker the hook is a no-op.)
 - Acquire: `https://id.atlassian.com/manage-profile/security/api-tokens`.
 - Access: the API token inherits the Atlassian user's permissions — the user must have Browse/Create/Edit/Transition on the target project. An unscoped token suffices for jira-cli; a scoped token must cover the JIRA project read/write operations.
 
@@ -276,14 +281,14 @@ unsuffixed `…_TOKEN`/`…_KEY` is the simplest to set in a single-account rout
 - Access: the personal API key inherits the user's workspace permissions — the user must be able to read/create/update Issues in the destination team.
 
 ### AWS — host-project operations, logs, deploys, CDK/Serverless/SST, or AWS SDK usage
-- Headless substrate: a dedicated IAM principal (user or role) with long-lived bootstrap credentials
-  stored in the routine environment, used only to call `sts:AssumeRole` into per-account operational
-  roles. The routine writes `~/.aws/config` profiles with `role_arn`, `credential_source =
-  Environment`, optional `external_id`, and `region`; agents use `aws --profile <profile> ...`.
-- Env: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`; optional `AWS_SESSION_TOKEN` for temporary
-  bootstrap credentials; `AWS_DEFAULT_REGION` when no profile region is provided. Role ARNs,
-  ExternalIds, profile names, and regions are non-secret project metadata and belong in generated
-  artifacts or project docs, not in the skill's global guidance.
+- Headless substrate: cdkstarter's vendor-neutral remote-agent kit. Its single
+  Secrets Manager SecretString contains the assume-only access key, ExternalId,
+  and per-account role metadata. `/lisa:setup-remote-aws` writes a private named
+  source profile and renewable role profiles; agents use
+  `aws --profile <profile> ...`.
+- Env: `LISA_AWS_BOOTSTRAP_JSON` (secret, required) and
+  `LISA_REMOTE_AGENT` (plain platform label). Do not set `AWS_ACCESS_KEY_ID` or
+  `AWS_SECRET_ACCESS_KEY` in the remote environment.
 - Allowlist: `*.amazonaws.com`, or narrower service hosts such as `sts.amazonaws.com`,
   `logs.<region>.amazonaws.com`, `cloudwatch.<region>.amazonaws.com`,
   `xray.<region>.amazonaws.com`, `ssm.<region>.amazonaws.com`, and service-specific endpoints the
@@ -350,23 +355,23 @@ so the generator can render acquisition comments into its template:
       "setupSnippet": "curl -fsSL https://native.jam.dev/install | bash; export PATH=\"$HOME/.local/bin:$PATH\"; printf '%s' \"$JAM_PAT\" | jam auth login --token; jam skills install"
     },
     {
-      "name": "SONAR_TOKEN", "required": false, "secret": true, "integration": "sonarcloud",
-      "reason": "optional non-tracker MCP recovery; SonarQube MCP wraps the token-authenticated SonarCloud Web API",
-      "headlessSubstrate": "SonarCloud Web API (token)",
+      "name": "SONARQUBE_CLI_TOKEN", "required": false, "secret": true, "integration": "sonarcloud",
+      "reason": "authenticates the official SonarQube MCP headlessly; the MCP runs as-is in a cloud routine (Docker is preinstalled), so no REST substitute is needed",
+      "headlessSubstrate": "Official SonarQube MCP (token-authed)",
       "acquireUrl": "https://docs.sonarsource.com/sonarqube-cloud/managing-your-account/managing-tokens",
-      "accessScope": "token must be able to read the target SonarCloud organization/project quality gate, issues, hotspots, rules, and source snippets"
+      "accessScope": "token must be able to read the target Sonar organization/project quality gate, issues, hotspots, rules, coverage, duplications, and dependency risks; add SONARQUBE_CLI_ORG (Cloud) or SONARQUBE_CLI_SERVER (Server)"
     }
   ],
   "mcp": [
     { "name": "linear-server", "transport": "http", "auth": "oauth", "headlessUsable": false, "replacedBy": "LINEAR_API_KEY + Linear GraphQL", "dormant": true },
     { "name": "jam", "transport": "http", "auth": "oauth", "headlessUsable": true, "replacedBy": "jam CLI + JAM_PAT", "dormant": true },
-    { "name": "sonarqube", "transport": "stdio", "auth": "local-wrapper", "headlessUsable": true, "replacedBy": "SONAR_TOKEN + SonarCloud Web API", "dormant": true }
+    { "name": "sonarqube", "transport": "stdio", "auth": "env-token", "headlessUsable": true, "replacedBy": null, "dormant": true }
   ],
   "awsProfiles": [
     {
-      "name": "dev",
+      "name": "<project>-agent-dev",
       "roleArn": "arn:aws:iam::<account-id>:role/<role-name>",
-      "credentialSource": "Environment",
+      "credentialSource": "<project>-agent-bootstrap",
       "externalId": "<project-external-id>",
       "region": "us-east-1"
     }

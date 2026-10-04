@@ -1,4 +1,4 @@
 display_name: "Linear Validate Issue"
-short_description: "Validates a proposed Linear work item spec (Project, Issue, or sub-Issue) — or an existing Linear item — against the organizational quality…"
+short_description: "Validates a proposed Linear…"
 default_prompt:
-  - "Use $lisa-linear-validate-issue: Validates a proposed Linear work item spec (Project, Issue, or sub-Issue) — or an existing Linear item — against the organizational quality…."
+  - "Use $lisa-linear-validate-issue: Validates a proposed Linear…."

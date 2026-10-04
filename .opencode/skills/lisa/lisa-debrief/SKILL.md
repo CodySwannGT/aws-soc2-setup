@@ -1,6 +1,6 @@
 ---
 name: lisa-debrief
-description: "Run the Debrief flow over a shipped initiative. Input: a PRD URL (Notion / Confluence / Linear / GitHub Issue / file), a JIRA epic key, or a GitHub epic issue URL. Output: a triage-ready learnings document covering every work item in the initiative — edge cases, gotchas, process friction, tooling gaps, convention drift — each with structured evidence and a human-disposition field. Persistence is deferred to lisa-debrief-apply."
+description: "Run the Debrief flow over a…"
 allowed-tools: ["Skill", "ToolSearch", "Bash", "Read", "Glob", "Grep", "TeamCreate"]
 ---
 
@@ -10,7 +10,9 @@ Walk the original Plan for `$ARGUMENTS`, mine the completed work items and their
 
 ## Orchestration: agent team
 
-If you are NOT already operating inside an agent team (no prior successful team-creation or subagent-delegation tool call in this session, not spawned into a team context), the very first thing you do is establish team orchestration.
+You are "inside an agent team" only if you are yourself a spawned teammate or subagent — you were spawned into a team context, or your context names a team lead you report to. A lead/root session that has previously spawned subagents is still the lead and retains full authority to create this flow's team.
+
+If you are NOT inside an agent team by that definition, the very first thing you do is establish team orchestration.
 
 Use the team tool for the current runtime:
 
@@ -66,11 +68,11 @@ A markdown triage document at `./debrief/<initiative-slug>-<YYYY-MM-DD>.md` (or 
 
 1. **Header** — initiative name, source PRD/epic link, work-item count, PR count, generation date, gate results.
 2. **Anomalies** — work items missing PRs, items with abnormal status-transition timing, PRs with no review comments at all (signal-of-absence is a learning), etc.
-3. **Candidate learnings** — one row per candidate, grouped by category (Edge case / Recurring gotcha / Process friction / Tooling gap / Convention drift). Each row has:
+3. **Candidate learnings** — one row per candidate, grouped by category (Edge case / Recurring gotcha / Process friction / Tooling gap / Convention drift / Decomposition infidelity / PRD defect / Missing tool access, plus `Uncategorized` for a finding none of the eight fit). The category set is owned by `learnings-synthesizer` — every category it can emit must have a section here and a route in `lisa-debrief-apply`, or an accepted row cannot be applied. Each row has:
    - `Summary` — one sentence
    - `Category`
    - `Evidence` — links to the source ticket comment / PR comment / commit / test file (multiple allowed)
-   - `Recommended persistence destination` — the agent's best guess for where this should land if accepted (e.g., "Edge Case Brainstorm checklist → Navigation & URL state", "PROJECT_RULES.md", "memory: project_*.md", "new tooling-gap ticket")
+   - `Recommended persistence destination` — the agent's best guess for where this should land if accepted (e.g., "Edge Case Brainstorm checklist → Navigation & URL state", "learnings ledger via the executable contract", "new tooling-gap ticket", "upstream Lisa issue"). Never name machine-local auto-memory, the host-rules directory `.agents/rules/`, or `AGENTS.md` — those are not persistence destinations.
    - `Disposition` — empty checkbox-style field the human will fill: `[ ] Accept` / `[ ] Reject` / `[ ] Defer` plus a free-text reason
 4. **Source map** — appendix listing every work item and PR walked, so the human can verify completeness.
 
@@ -87,7 +89,7 @@ After producing the triage document, print:
 
 ```text
 Triage document written to: <path>
-Counts: <n> edge cases, <n> gotchas, <n> friction, <n> tooling gaps, <n> convention drift; <n> anomalies
+Counts: <n> edge cases, <n> gotchas, <n> friction, <n> tooling gaps, <n> convention drift, <n> decomposition infidelity, <n> PRD defects, <n> missing tool access, <n> uncategorized; <n> anomalies
 Next: human triage. When done, run `/lisa:debrief:apply <path>` to persist accepted learnings.
 ```
 

@@ -1,6 +1,6 @@
 ---
 name: lisa-tracker-add-journey
-description: "Vendor-neutral wrapper for appending a Validation Journey section to an existing ticket/issue. Reads the required `tracker` from .lisa.config.json and dispatches to lisa-jira-add-journey, lisa-github-add-journey, or lisa-linear-add-journey."
+description: "Vendor-neutral wrapper for…"
 allowed-tools: ["Skill", "Bash", "Read"]
 ---
 
@@ -23,5 +23,6 @@ See the `config-resolution` rule for configuration and dispatch table.
 
 ## Rules
 
-- The Validation Journey content format is identical across all vendors (markdown sections with `[EVIDENCE: name]` markers). The only difference is how the section is appended — JIRA via `editJiraIssue` (Jira wiki markup), GitHub via `gh issue edit --body-file` (markdown), Linear via `save_issue` (markdown).
-- If the ticket already has a Validation Journey, the vendor skill reports it and stops. This shim does not retry.
+- The Validation Journey content format is identical across all vendors (markdown sections with typed `[EVIDENCE: <artifact-type>: <name>]` markers per the `verification` rule taxonomy). The only difference is how the section is appended — JIRA via `editJiraIssue` (Jira wiki markup), GitHub via `gh issue edit --body-file` (markdown), Linear via `save_issue` (markdown).
+- A cross-work-item pointer uses `[EVIDENCE-REF: <work-item-ref> | <artifact-type>: <kebab-case-name>]`. It is non-claiming and never replaces a runtime-changing leaf's local S14 marker.
+- If the ticket already has a Validation Journey with at least one local typed `[EVIDENCE: ...]` marker, the vendor skill reports it and stops. A reference-only journey is incomplete; the vendor skill preserves its prose and appends the missing local evidence. This shim does not retry.

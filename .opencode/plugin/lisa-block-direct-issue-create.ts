@@ -1,0 +1,907 @@
+/**
+ * Lisa-managed OpenCode plugin (tool.execute.before).
+ *
+ * Refuses a direct tracker-creation command that declares no readiness. The
+ * `ready-role-filing` rule says every filing carries either `build_ready: true`
+ * or an explicit `human_gate:` reason and goes through `lisa-track` /
+ * `lisa-tracker-write`. An audit of one working session found 13 of 13 issues
+ * filed in violation of it, several by the agent that wrote the rule — while
+ * the one obligation backed by a git hook was honored 50 out of 50 times. This
+ * is that rule promoted from prose to an executable control.
+ *
+ * Port of Lisa's canonical hook `block-direct-issue-create.sh`. OpenCode
+ * exposes the shell as the `bash` tool, so the command arrives on
+ * `output.args.command`. Throwing in `tool.execute.before` cancels the tool
+ * call and surfaces the message to the agent.
+ *
+ * BOTH SUBSTRATES. Since CodySwannGT/lisa#3753 the canonical guard covers a
+ * second substrate — structured tool payloads, where a creation arrives as
+ * named fields rather than a command line. This port covered only `bash` until
+ * CodySwannGT/lisa#3785 closed that gap; `refuseUndeclaredStructured` below
+ * carries the structured arm and documents the captured OpenCode envelope it
+ * was written against. Unlike agy, OpenCode needs no registration change: a
+ * plugin's `tool.execute.before` already receives every tool call, so the gap
+ * here was the early return alone.
+ *
+ * The port matches on the raw command text rather than tokenising it, which
+ * makes it naturally immune to the prefix and tokenisation bypass classes the
+ * shell guard had to be restructured to close — an unrecognised wrapper is just
+ * more text before the CLI name.
+ *
+ * It reaches past the command text in the two places the canonical guard does:
+ * into the contents of any file the command names — which is what closes
+ * `bash create.sh`, `node wrapper.mjs` and `curl --data-binary @payload.json`
+ * — and into the lifecycle-role declaration a state-based tracker has to use
+ * because no flag on `curl` can carry a workflow state.
+ *
+ * Two deliberate differences remain, both in the permissive direction so this
+ * port can never refuse something the canonical guard would allow:
+ *   - remote execution (`ssh host '…'`) is not intercepted, matching the shell
+ *     guard's documented limit;
+ *   - a declaration found inside a FILE answers for every creation in that
+ *     file. Matching raw text cannot attribute a label to one create among
+ *     several, and the alternative — accepting only whole-scope markers there
+ *     — would refuse an honest single-create script that carries its label.
+ *
+ * NOTE: This file is a template Lisa copies verbatim into a host project's
+ * `.opencode/plugin/`. It is intentionally excluded from this repo's tsconfig
+ * and eslint config — it runs under OpenCode's Bun runtime, not here.
+ */
+/**
+ * Where one command ends and the next begins.
+ *
+ * Only used to decide which segment a filename belongs to, never to decide the
+ * verdict — the raw command text is still matched whole, so a separator this
+ * misses cannot hide a creation.
+ */
+const COMMAND_SEPARATORS = /\|\||&&|[;|&\n]/u;
+
+/**
+ * Shells whose `-n` means "parse it, execute none of it".
+ */
+const NOEXEC_SHELLS = new Set(["bash", "dash", "ksh", "sh", "zsh"]);
+
+/**
+ * Whether a command segment is a shell syntax check.
+ *
+ * ## Why this exists in a guard that otherwise reads raw text
+ *
+ * CodySwannGT/lisa#3781 found `bash -n <file>` to be the one shape that puts a
+ * path in a command position while provably executing nothing, and the
+ * canonical guard got it wrong in both directions: a creation-shaped file
+ * earned a false refusal, and a file carrying a human-gate marker earned a
+ * false ALLOW — adjudicating as "declared" a command that filed nothing. The
+ * silent direction is the worse one. CodySwannGT/lisa#3885 found the arm had
+ * reached the canonical guard and not this port.
+ *
+ * The distinction is noexec, not the program: `bash <file>` still runs the file
+ * and is still refused.
+ *
+ * ## Why the LAST shell token, not the first
+ *
+ * `nice -n 5 bash -n script.sh` is in the canonical guard's own table, and it
+ * carries two `-n` flags belonging to different programs. Reading the first
+ * token would see `nice`, conclude "not a shell", and follow the file; reading
+ * any `-n` anywhere would let `nice -n 5 bash script.sh` masquerade as a syntax
+ * check, which is a real bypass. So the shell is located first and only its own
+ * options are read.
+ * @param segment One command, already split on shell separators.
+ * @returns Whether the segment parses a file instead of running it.
+ */
+const isSyntaxCheck = (segment: string): boolean => {
+  const tokens = segment
+    .trim()
+    .split(/[\s'"]+/u)
+    .filter(Boolean);
+  const shellAt = tokens.reduce(
+    (last, token, index) =>
+      NOEXEC_SHELLS.has(token.split("/").pop() ?? "") ? index : last,
+    -1
+  );
+  if (shellAt === -1) return false;
+  for (const token of tokens.slice(shellAt + 1)) {
+    // Options only. The first operand ends the option list, and a path is not
+    // an option however it is spelled.
+    if (!token.startsWith("-")) return false;
+    if (token === "--noexec") return true;
+    // `-c` takes a command STRING, so nothing after it is a file this guard
+    // should reason about positionally; `-en` is a cluster carrying noexec.
+    if (!token.startsWith("--") && token.slice(1).includes("n")) return true;
+  }
+  return false;
+};
+
+export /**
+ *
+ */
+const LisaBlockDirectIssueCreate = async () => {
+  const HUMAN_GATE_MARKER = "[lisa-human-gate]";
+
+  /**
+   * Decoration a hold declaration may sit behind, and nothing more.
+   *
+   * The OpenCode port of the rule the bash guard applies
+   * (CodySwannGT/lisa#3815). This is a TWELFTH copy of a predicate that ticket
+   * inventoried at eleven, and it is named here because the cross-repo parity
+   * suite compares this port's verdict with the bash guard's on every case — so
+   * a precision change landing on one and not the other is a parity break
+   * rather than a silent divergence. That suite is what found it.
+   */
+  const HUMAN_GATE_DECORATION =
+    /^[ \t>*_+#-]*(?:\d+[.)][ \t]*)?(?:<!--[ \t]*)?[ \t]*/u;
+
+  /**
+   * Whether a text DECLARES a hold rather than merely mentioning one.
+   *
+   * The bare `includes` this replaces read a body that DISCUSSES the marker as
+   * a body that declares a hold. A declaration is positional: the marker leads
+   * its line behind at most the decoration above, or sits inside an HTML
+   * comment on that line, with fenced blocks and inline code spans removed
+   * first because that is how the marker gets written about.
+   */
+  const declaresHumanGate = (text: string): boolean => {
+    if (!text) return false;
+    const body = text
+      .replace(/```[\s\S]*?```/gu, "")
+      .replace(/`[^`\n]*`/gu, "");
+    return body.split("\n").some(line => {
+      if (
+        line.replace(HUMAN_GATE_DECORATION, "").startsWith(HUMAN_GATE_MARKER)
+      ) {
+        return true;
+      }
+      return line
+        .split("<!--")
+        .slice(1)
+        .some(segment => {
+          const close = segment.indexOf("-->");
+          const inside = close === -1 ? segment : segment.slice(0, close);
+          return inside.includes(HUMAN_GATE_MARKER);
+        });
+    });
+  };
+  /**
+   * A label / workflow-state assignment and its value.
+   *
+   * Long forms only, deliberately: short flags are per-CLI (`-s` is `--state`
+   * on one and `--summary` on another), so accepting them would re-open the
+   * free-text hole one letter smaller. Every Lisa writer emits the long form.
+   */
+  const LABEL_FLAG =
+    /--(?:label|labels|add-label|status|state)(?:=|\s+)(['"]?)([^'"\s]+)\1/g;
+  /**
+   * The repository a creation is ADDRESSED at, which decides whose ready role
+   * answers for it. `-R` is honored here even though short flags are refused
+   * for labels above: `--repo`/`-R` is one flag on one CLI with one meaning,
+   * where the label short forms collide across trackers.
+   */
+  const REPO_FLAG = /(?:^|\s)(?:--repo|-R)(?:=|\s+)(['"]?)([^'"\s]+)\1/;
+  const ISSUES_ENDPOINT = /repos\/([^/\s]+)\/([^/\s]+)\/issues\b/;
+  const DEFAULT_READY_ROLE = "status:ready";
+  const DEFAULT_UPSTREAM_REPO = "CodySwannGT/lisa";
+  /**
+   * The build-ready declaration for a tracker whose ready role is a workflow
+   * STATE rather than a label.
+   *
+   * GitHub's role is a label and labels are argv-native, so `--label` has
+   * always been writable there. JIRA's and Linear's are states living in the
+   * request payload, and the mandated client is `curl`, which has no flag that
+   * carries one — so the only declaration those trackers could satisfy was
+   * `[lisa-human-gate]`, a false statement about a build-ready item. A guard
+   * that leaves an honest operator no compliant command and one dishonest one
+   * fails in the harmful direction.
+   *
+   * The role is what the access layer already consumes: it refuses a
+   * caller-supplied state id, takes `lifecycle_role`, resolves it against the
+   * tracker's own catalog and fails closed. So the token decides the lane
+   * rather than decorating the command.
+   *
+   * The optional quote AFTER the key name is load-bearing: the refusal tells
+   * the operator to put the declaration in the request payload, and a JSON
+   * payload quotes its keys, so demanding `[:=]` immediately after a bare key
+   * name refuses the exact spelling it just asked for.
+   */
+  const LIFECYCLE_ROLE_READY =
+    /(?:^|[^\w.-])(?:lifecycle_role|LIFECYCLE_ROLE)["']?\s*[:=]\s*["']?ready\b|(?:^|[^\w.-])--role[=\s]+["']?ready\b/;
+  /**
+   * The third declaration: this item is a CONTAINER.
+   *
+   * A container is neither build-ready nor human-gated. `leaf-only-lifecycle`
+   * FORBIDS the build-ready role on an Epic, and a human gate it does not have
+   * is a durable false hold — so a guard with only the two arms above could be
+   * satisfied for a container only by writing something untrue, and both
+   * untruths corrupt data another control reads.
+   *
+   * It keys on the canonical container line that `derived-branch-plan` defines
+   * and `lisa-github-write-issue` already stamps, NOT on a declared
+   * `type:Epic`. A declared type is a claim that costs a leaf nothing and
+   * leaves it looking buildable; the container line costs the item its Target
+   * Backend Environment and Branch Plan, so it is only useful to something
+   * that actually is a container.
+   *
+   * Matched as the WHOLE canonical value, `None` included: the tail alone
+   * would match ordinary prose about how a container's state behaves, and a
+   * declaration that ordinary prose satisfies is not a declaration.
+   * Whitespace-tolerant because a body file may wrap the line; dash-tolerant
+   * because an author retyping it by hand will not always reach for the em
+   * dash.
+   */
+  const CONTAINER_DECLARATION =
+    /None\s*[\u2014\u2013-]\s*container:\s*state\s+rolls\s+up\s+from\s+children/i;
+  /**
+   * The checkable half of "is it really a container": an item cannot be a
+   * container and a by-design leaf at once. The types are quoted from
+   * `leaf-only-lifecycle`. Story and Spike are deliberately absent — that
+   * rule's childless-parent exception makes them leaf-or-container depending
+   * on child work, and a decomposition legitimately files a parent Story
+   * before the children that make it one.
+   */
+  const LEAF_TYPE_FLAG =
+    /--(?:label|labels|add-label|type|issue-type|issuetype)(?:=|\s+)(['"]?)(?:type:)?(bug|task|sub-?task|improvement)\1(?=[\s,]|$)/i;
+  /** A creation verb, and a tracker endpoint to send it to. */
+  const GRAPHQL_CREATE = /createIssue|issueCreate/;
+  const TRACKER_ENDPOINT =
+    /api\.linear\.app\/graphql|api\.github\.com|atlassian\.net\/rest\/api|repos\/[^/\s?#'"]+\/[^/\s?#'"]+\/issues/i;
+  /** Bounds on reading files a command names, so a hook stays a hook. */
+  const MAX_FILE_BYTES = 262_144;
+  const MAX_FILES = 8;
+  const CREATION_SIGNATURES: readonly {
+    readonly re: RegExp;
+    readonly name: string;
+  }[] = [
+    {
+      re: /(^|[;&|("'\s])gh\s+issue\s+(?:--?\S+(?:[= ]\S+)?\s+)*create(\s|$)/,
+      name: "gh issue create",
+    },
+    {
+      re: /(^|[;&|("'\s])linear\s+issue\s+(?:--?\S+(?:[= ]\S+)?\s+)*create(\s|$)/,
+      name: "linear issue create",
+    },
+    {
+      re: /(^|[;&|("'\s])jira\s+issue\s+(?:--?\S+(?:[= ]\S+)?\s+)*create(\s|$)/,
+      name: "jira issue create",
+    },
+    {
+      re: /(^|[;&|("'\s])acli\s+[^;&|]*\b(workitem|issue)s?\s+create\b/,
+      name: "acli … create",
+    },
+    {
+      // Scoped to a tracker API call on purpose. A bare mutation NAME is just a
+      // word: `git commit -m "fix issueCreate typo"` and `rg issueCreate` are
+      // ordinary commands, and matching them made the guard refuse work it has
+      // no business refusing. The mutation only means a creation when it is
+      // being SENT, so `gh api` or an HTTP write to Linear's endpoint must
+      // appear on the same command.
+      re: /(?:(^|[;&|("'\s])gh\s+[^;&|]*\bapi\b|api\.linear\.app\/graphql)[^;&|]*\b(createIssue|issueCreate)\b/,
+      name: "a GraphQL issue-creation mutation",
+    },
+    {
+      re: /repos\/[^/\s]+\/[^/\s]+\/issues\b[^;&|]*(-X\s*POST|--method\s+POST|\s-[fF]\s|--input\b|--data\b)/,
+      name: "a POST to the issues endpoint",
+    },
+    {
+      re: /atlassian\.net\/rest\/api\/[^/\s]+\/issue\b[^;&|]*(-X\s*POST|--request\s+POST|--data\b)/,
+      name: "a POST to the JIRA issue endpoint",
+    },
+  ];
+
+  interface LisaConfig {
+    tracker?: string;
+    github?: {
+      org?: string;
+      repo?: string;
+      labels?: { build?: { ready?: string } };
+    };
+    jira?: { workflow?: { ready?: string } };
+    linear?: { workflow?: { ready?: string } };
+    hardening?: { upstreamRepo?: string; upstreamReadyRole?: string };
+  }
+
+  /** Everything the guard needs to decide whose ready role answers. */
+  interface FilingPolicy {
+    /** The calling project's own build-ready role. */
+    readonly readyRole: string;
+    /** The calling project's own repository, when it declares one. */
+    readonly ownRepo: string | undefined;
+    /** The repository upstream defects are filed at. */
+    readonly upstreamRepo: string;
+    /** The ready role that repository runs its build queue off. */
+    readonly upstreamReadyRole: string;
+    /** Whether the caller's ready role is a GitHub label at all. */
+    readonly callerIsGithub: boolean;
+    /** Whether the caller's ready role is a workflow state, not a label. */
+    readonly stateRoleTracker: boolean;
+  }
+
+  /** Which roles satisfy a filing, and the target a refusal should name. */
+  interface Verdict {
+    readonly roles: readonly string[];
+    /** Set only when the filing is provably addressed at another repository. */
+    readonly named: string | undefined;
+  }
+
+  /**
+   * Read one config file, tolerating absence.
+   * @param file Path relative to the project root.
+   * @returns The parsed config, or an empty object.
+   */
+  const readConfig = async (file: string): Promise<LisaConfig> => {
+    try {
+      return JSON.parse(await Bun.file(file).text()) as LisaConfig;
+    } catch {
+      return {};
+    }
+  };
+
+  /**
+   * The filing policy, or undefined when no tracker is set.
+   *
+   * Keyed off the resolved `tracker` rather than provider precedence: reading
+   * whichever provider block happened to appear first could hand a GitHub label
+   * to a Linear project, so the guard and the writer would disagree about what
+   * a declaration even looks like. The local overlay is layered over the base
+   * with field-level precedence, matching how `lisa-tracker-read` and
+   * `lisa-tracker-write` resolve it — a project that overrides its tracker only
+   * in `.lisa.config.local.json` was previously invisible here.
+   *
+   * Resolved once per session at plugin init. That is a deliberate snapshot: a
+   * config edit mid-session needs a session restart to take effect, which is
+   * the same lifetime as the rest of this plugin's state.
+   * @returns The filing policy, or undefined.
+   */
+  const resolvePolicy = async (): Promise<FilingPolicy | undefined> => {
+    const base = await readConfig(".lisa.config.json");
+    const local = await readConfig(".lisa.config.local.json");
+    const tracker = local.tracker ?? base.tracker;
+    // No configured tracker means no `lisa-tracker-write` to route through —
+    // the bootstrapping case, detected rather than asserted.
+    if (!tracker) return undefined;
+    const pick = (config: LisaConfig): string | undefined => {
+      if (tracker === "github") return config.github?.labels?.build?.ready;
+      if (tracker === "jira") return config.jira?.workflow?.ready;
+      if (tracker === "linear") return config.linear?.workflow?.ready;
+      return undefined;
+    };
+    const org = local.github?.org ?? base.github?.org;
+    const name = local.github?.repo ?? base.github?.repo;
+    const hardening = { ...base.hardening, ...local.hardening };
+    return {
+      readyRole: pick(local) ?? pick(base) ?? DEFAULT_READY_ROLE,
+      ownRepo: org && name ? `${org}/${name}`.toLowerCase() : undefined,
+      upstreamRepo: (
+        hardening.upstreamRepo ?? DEFAULT_UPSTREAM_REPO
+      ).toLowerCase(),
+      upstreamReadyRole: hardening.upstreamReadyRole ?? DEFAULT_READY_ROLE,
+      callerIsGithub: tracker === "github",
+      stateRoleTracker: tracker === "jira" || tracker === "linear",
+    };
+  };
+
+  const policy = await resolvePolicy();
+
+  /**
+   * The readable files a command names, with their contents.
+   *
+   * The guard used to match the command text and nothing else, so a creation
+   * one file away was invisible: `bash create.sh` is two words, and the
+   * conjunction it looks for — an endpoint and a creation verb together — never
+   * formed. Lisa's own guards push agents into exactly that shape, telling them
+   * to write payloads to a file and execute the file, so complying with the
+   * guidance produced the bypass.
+   *
+   * Which programs execute their operands is unbounded and every gap in such a
+   * list fails open, so the question is inverted the same way the wrapper
+   * question was: which tokens name a file? That is bounded by the command.
+   * @param props Helper inputs.
+   * @param props.text The command being inspected.
+   * @returns Each named file's path and contents, bounded in count and size.
+   */
+  const namedFiles = async ({
+    text,
+  }: Readonly<{ text: string }>): Promise<
+    readonly { readonly path: string; readonly text: string }[]
+  > => {
+    const found: { path: string; text: string }[] = [];
+    const seen = new Set<string>();
+    const candidates = text
+      .split(COMMAND_SEPARATORS)
+      // A syntax check READS its operand and runs not one line of it, so the
+      // file it names is not a file this command executes. Dropped per SEGMENT
+      // rather than per command, which is what keeps `bash -n x.sh && bash x.sh`
+      // refused: the second segment names the same path and is harvested
+      // normally. See {@link isSyntaxCheck}.
+      .filter(segment => !isSyntaxCheck(segment))
+      .join(" ")
+      .split(/[\s'"]+/)
+      // `curl -d@payload.json` is one word, and the path is the half after the
+      // `@`. Both halves are offered rather than guessing which flag it was.
+      .flatMap(raw =>
+        raw.includes("@") ? [raw, raw.split("@").pop() ?? ""] : [raw]
+      );
+    for (const raw of candidates) {
+      if (found.length >= MAX_FILES) break;
+      const token = raw.replace(/^@/, "");
+      if (!token || token === "-" || seen.has(token)) continue;
+      seen.add(token);
+      try {
+        const handle = Bun.file(token);
+        // A file too large to inspect is skipped rather than half-read: a
+        // truncated scan reports a confident allow about text it never saw.
+        if (handle.size === 0 || handle.size > MAX_FILE_BYTES) continue;
+        if (!(await handle.exists())) continue;
+        found.push({ path: token, text: await handle.text() });
+      } catch {
+        continue;
+      }
+    }
+    return found;
+  };
+
+  /**
+   * A repository token reduced to a comparable `owner/name`.
+   *
+   * gh accepts `OWNER/REPO`, `HOST/OWNER/REPO`, and a full browser URL, and
+   * GitHub is case-insensitive about both halves — so comparing raw tokens
+   * would call one repository two different places depending on how it was
+   * typed.
+   * @param props Helper inputs.
+   * @param props.value The raw token.
+   * @returns The `owner/name` pair with the caller's casing preserved, or
+   *   undefined when it names no repository. Callers fold case to compare.
+   */
+  const normaliseRepo = ({
+    value,
+  }: Readonly<{ value: string }>): string | undefined => {
+    const text = value.replace(/\.git$/, "");
+    const parts = text.split("/").filter(part => part && !part.endsWith(":"));
+    if (parts.length < 2) return undefined;
+    // Casing preserved; folded only where it is compared. The refusal names
+    // this back to an operator, and echoing a lowercased slug at someone who
+    // typed the canonical spelling reads as a different repository.
+    return `${parts.at(-2)}/${parts.at(-1)}`;
+  };
+
+  /**
+   * The repository this creation is addressed at, when it names one.
+   * @param props Helper inputs.
+   * @param props.declarable The command text up to a bare `--`.
+   * @returns The original-casing `owner/name` when the command names a target
+   *   repository, or undefined when it names no target repository.
+   */
+  const targetRepository = ({
+    declarable,
+  }: Readonly<{ declarable: string }>): string | undefined => {
+    const flag = REPO_FLAG.exec(declarable);
+    if (flag?.[2]) return normaliseRepo({ value: flag[2] });
+    const endpoint = ISSUES_ENDPOINT.exec(declarable);
+    if (endpoint)
+      return normaliseRepo({ value: `${endpoint[1]}/${endpoint[2]}` });
+    return undefined;
+  };
+
+  /**
+   * Which ready-role tokens satisfy a creation addressed at `target`.
+   *
+   * A declaration is demanded either way; this decides only WHOSE vocabulary
+   * it is written in. The last branch is the indeterminate case — a
+   * GitHub-tracked project declaring no `github.org`/`github.repo` cannot be
+   * compared against a target, so both roles are accepted rather than
+   * inventing a refusal, and no cross-repo target is reported: the cross-repo
+   * message would claim this project's role does not answer, which is false in
+   * exactly that branch.
+   * @param resolved The filing policy.
+   * @param target The addressed repository, or undefined.
+   * @returns The acceptable role tokens, and the target to name in a refusal.
+   */
+  const rolesFor = (
+    resolved: FilingPolicy,
+    target: string | undefined
+  ): Verdict => {
+    // GitHub is case-insensitive about owner and name, so the comparison folds
+    // case while the reported string keeps the operator's own spelling.
+    const folded = target?.toLowerCase();
+    if (folded === undefined || folded === resolved.ownRepo)
+      return { roles: [resolved.readyRole], named: undefined };
+    const role =
+      folded === resolved.upstreamRepo
+        ? resolved.upstreamReadyRole
+        : DEFAULT_READY_ROLE;
+    if (resolved.ownRepo !== undefined || !resolved.callerIsGithub)
+      return { roles: [role], named: target };
+    return { roles: [resolved.readyRole, role], named: undefined };
+  };
+
+  /**
+   * The refusal both substrates raise, so neither can drift from the other.
+   *
+   * Extracted rather than copied when the structured substrate arrived
+   * (CodySwannGT/lisa#3785): a refusal that exists twice is a refusal that
+   * names the sanctioned paths twice, and the acceptance criterion for that
+   * ticket is that the structured refusal names the SAME two the shell one
+   * does. Only the "where the declaration is read from" paragraph differs,
+   * because on one substrate it is a command line and on the other it is a
+   * field.
+   * @param signatureName What is being refused, in the message's own voice.
+   * @param resolved The filing policy.
+   * @param readFrom The substrate-specific paragraph.
+   * @returns The error to throw.
+   */
+  const undeclaredRefusal = ({
+    readFrom,
+    resolved,
+    signatureName,
+  }: Readonly<{
+    readFrom: readonly string[];
+    resolved: FilingPolicy;
+    signatureName: string;
+  }>): Error =>
+    new Error(
+      [
+        `block-direct-issue-create: refusing ${signatureName} — this filing declares no readiness.`,
+        "",
+        "WHY: a work item filed without the build-ready role is an incomplete",
+        "handoff. Build-intake scans the ready lane and nothing else, so nothing",
+        "will ever pick it up: the write succeeds and the work still dies.",
+        "",
+        "FILE IT THE SANCTIONED WAY — one of these two, always explicit:",
+        "",
+        '1. Complete enough to build? Run /lisa:track "<what needs building>",',
+        "   which resolves or creates exactly one live leaf through",
+        "   lisa-tracker-write with build_ready: true, validates it before the",
+        "   write, and claims it.",
+        "2. A human product call is pending? Route the same way but pass",
+        '   human_gate: "<why a human must judge this first>", which stamps',
+        `   ${HUMAN_GATE_MARKER} on the item so the hold is auditable.`,
+        "",
+        "Filed, not ready, and no human_gate is the incomplete-handoff case. See",
+        "the ready-role-filing rule for the full contract.",
+        "",
+        "If you must run the CLI directly, the command has to carry one of the",
+        `two declarations itself: the configured build-ready role "${resolved.readyRole}",`,
+        `or a ${HUMAN_GATE_MARKER} marker in the body it submits.`,
+        ...(resolved.stateRoleTracker
+          ? [
+              "",
+              `Your role "${resolved.readyRole}" is a workflow STATE, not a label, and the`,
+              "mandated client is curl, which has no flag that carries a state. So",
+              "declare the lifecycle role the access layer resolves the state from:",
+              "",
+              "  LIFECYCLE_ROLE=ready curl -sS -X POST <the tracker endpoint> …",
+              "",
+              'or lifecycle_role:"ready" in the request payload, or a --state /',
+              "--status flag where the CLI has one.",
+            ]
+          : []),
+        "",
+        ...readFrom,
+        "",
+        "OPERATOR ESCAPE: a human can export LISA_ALLOW_DIRECT_ISSUE_CREATE=1 in",
+        "the environment before starting the session. Setting it inline on this",
+        "command is deliberately refused.",
+      ].join("\n")
+    );
+
+  /**
+   * Tool names that are never a tracker creation, skipped before anything else.
+   *
+   * The canonical guard's own list, transcribed rather than adapted. It is
+   * mostly a cost gate, but not ONLY one: `TaskCreate` and friends satisfy
+   * both shape tests below, so for the `Task*` family this set is also the
+   * correctness decision — the canonical guard allows them unconditionally,
+   * and a port that skips them here rather than below is the only way to
+   * stay exactly as strict, never stricter.
+   */
+  const STRUCTURED_SKIP: ReadonlySet<string> = new Set([
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "Glob",
+    "Grep",
+    "Task",
+    "TodoWrite",
+    // The `Task*` family is the runtime's in-session task list — LOCAL
+    // scratch, not a tracker write. `TaskCreate` satisfies both shape gates
+    // (create-verb + task noun) and carries `"type": "bug"` metadata the
+    // lisa-implement skill prescribes; absent from this set it is refused as
+    // a tracker creation here while the canonical guard allows it — making
+    // this port STRICTER, the one direction it is documented never to take
+    // (CodySwannGT/lisa#4274).
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskOutput",
+    "TaskStop",
+    "TaskUpdate",
+  ]);
+  /**
+   * A creation verb in a tool name, matched on SHAPE rather than on a list of
+   * server tool names. Case-folded on the first letter only, exactly as the
+   * canonical guard's `*[Cc]reate*` globs are: matching case-insensitively
+   * would make this port STRICTER than the canonical guard, and the invariant
+   * this port is documented under is that it is never stricter, only looser.
+   */
+  const STRUCTURED_VERB = /[Cc]reate|[Nn]ew|[Aa]dd|[Ff]ile/u;
+  /**
+   * A tracker noun in a tool name. Same transcription rule as the verb above.
+   */
+  const STRUCTURED_NOUN =
+    /[Ii]ssue|[Tt]icket|[Tt]ask|[Ss]tory|[Bb]ug|[Ee]pic|[Ww]ork/u;
+
+  /**
+   * Every string in a structured payload, at any depth.
+   *
+   * Over-collecting is safe and is what the canonical guard does: a role lands
+   * in a different field on every tracker — `labels[]` on GitHub, a workflow
+   * state on Linear, a transition id on JIRA — and enumerating field names per
+   * vendor is the same brittleness as enumerating tool names. The values are
+   * compared against ONE configured role string, so an unrelated field cannot
+   * accidentally satisfy it.
+   * @param value Any decoded JSON value.
+   * @returns Every string reachable from it.
+   */
+  const flatten = (value: unknown): readonly string[] => {
+    if (typeof value === "string") return [value];
+    if (Array.isArray(value)) return value.flatMap(flatten);
+    if (value !== null && typeof value === "object")
+      return Object.values(value).flatMap(flatten);
+    return [];
+  };
+
+  /**
+   * Refuse a structured creation that declares no readiness.
+   *
+   * ## Why this exists on a port whose other arm reads a command line
+   *
+   * CodySwannGT/lisa#3753 taught the canonical guard that a creation also
+   * arrives as NAMED FIELDS. This port returned early for every tool but
+   * `bash`, so on OpenCode that substrate was unenforced — the shape
+   * CodySwannGT/lisa#3785 exists to close.
+   *
+   * OpenCode's envelope was CAPTURED, not guessed. Driving `opencode run`
+   * against a local MCP server exposing one `create_issue` tool, with a probe
+   * plugin on `tool.execute.before`, on OpenCode 1.17.13:
+   *
+   *   input  {"tool":"probe-tracker_create_issue", …}
+   *   output {"args":{"title":"envelope probe","body":"capture"}}
+   *
+   * So unlike agy — which funnels every MCP call through one generic tool name
+   * and hides the real one in the arguments — OpenCode names the tool
+   * `<server>_<tool>` and puts the tool's own arguments directly on `args`.
+   * That is the shape the canonical guard's structured classifier already
+   * reads, which is why this arm can transcribe its predicate instead of
+   * translating an envelope.
+   *
+   * ## Why the predicate is transcribed rather than delegated
+   *
+   * The canonical guard is a bash script, and it is not shipped to OpenCode —
+   * this template is the whole of what a host project receives. So the port
+   * carries the predicate, as it already does for the shell arm, and the
+   * cross-implementation parity suite is what stops the two drifting: it
+   * drives both with the same payloads and compares verdicts.
+   * @param args The tool's arguments, as OpenCode decoded them.
+   * @param policy The filing policy.
+   * @param tool The tool name.
+   * @throws When the call reads as an undeclared tracker creation.
+   */
+  const refuseUndeclaredStructured = ({
+    args,
+    policy: resolved,
+    tool,
+  }: Readonly<{
+    args: Record<string, unknown>;
+    policy: FilingPolicy;
+    tool: string;
+  }>): void => {
+    // The cheap shape gate, deliberately before anything that costs. This hook
+    // now runs on EVERY tool call, so the cost of the path that does nothing is
+    // the cost of the whole change.
+    //
+    // RESIDUAL, stated rather than hidden, and inherited verbatim from the
+    // canonical guard: a server whose creation tool is named without a
+    // create-verb or without a tracker noun is not recognised and is allowed.
+    // That is a fail-open, and it is the honest cost of refusing to enumerate
+    // server tool names — a list passes every row anyone thought of and misses
+    // the first one nobody did.
+    if (STRUCTURED_SKIP.has(tool)) return;
+    if (!STRUCTURED_VERB.test(tool)) return;
+    if (!STRUCTURED_NOUN.test(tool)) return;
+    // The operator's ambient escape works on both substrates. There is no
+    // inline form to disqualify here — a structured call has no shell in which
+    // to assign one — so the override is simply honoured.
+    if (process.env["LISA_ALLOW_DIRECT_ISSUE_CREATE"]) return;
+
+    const values = flatten(args);
+    // A PACKED label string counts. Exact equality against the flattened value
+    // list reads `labels: ["status:ready"]` and nothing else, but the same
+    // compliant filing spelled `labels: "status:ready,type:Bug"` carries no
+    // value equal to the role. Split on the DELIMITERS a packed list uses and
+    // trim, never on a `contains` match: `contains` would accept a body that
+    // merely mentions the role in prose — "do not mark this status:ready" —
+    // and that is a fail-open on the one question this path answers.
+    const atoms = [
+      ...values,
+      ...values.flatMap(value =>
+        value.split(/[,;\n]/u).map(part => part.trim())
+      ),
+    ];
+    if (atoms.includes(resolved.readyRole)) return;
+    // Matched as a bare substring, matching the canonical guard rather than
+    // this port's stricter shell-path reader. A structured field is not prose
+    // with fenced blocks in it, and being stricter here than the canonical
+    // guard is the one direction this port is documented never to take.
+    if (values.some(value => value.includes(HUMAN_GATE_MARKER))) return;
+
+    throw undeclaredRefusal({
+      readFrom: [
+        "WHERE THE DECLARATION IS READ FROM: every field of the payload this call",
+        "submits, at any depth — the role lands in a different field on every",
+        "tracker, so no single field name is demanded.",
+      ],
+      resolved,
+      signatureName: `a tracker creation through ${tool}`,
+    });
+  };
+
+  return {
+    "tool.execute.before": async (
+      input: { tool: string },
+      output: { args?: Record<string, unknown> }
+    ) => {
+      if (policy === undefined) return;
+      if (input.tool !== "bash") {
+        refuseUndeclaredStructured({
+          args: output.args ?? {},
+          policy,
+          tool: input.tool,
+        });
+        return;
+      }
+      const command = String(output.args?.["command"] ?? "");
+      if (!command) return;
+      if (/--help\b|\s-h(\s|$)/.test(command)) return;
+      // The override is honored only from the ambient environment. An inline
+      // assignment is the agent granting itself the exemption, so it
+      // disqualifies the override rather than supplying it.
+      const inlineOverride = /LISA_ALLOW_DIRECT_ISSUE_CREATE=/.test(command);
+      if (process.env["LISA_ALLOW_DIRECT_ISSUE_CREATE"] && !inlineOverride)
+        return;
+      const inline = CREATION_SIGNATURES.find(entry => entry.re.test(command));
+      // The build-ready role counts ONLY as the value of a label / state flag.
+      // A free-text scan of the command let a bug report's own title declare
+      // readiness — `gh issue create --title "status:ready is broken"` — which
+      // is the same position-blind matching that turned #2469's hardening
+      // allowlist into a bypass. The human-gate marker is matched anywhere by
+      // contrast, because it is a marker with no other meaning.
+      // Everything after a bare `--` is an operand and cannot reach the
+      // created item, so no declaration may be read from there. gh rejects
+      // post-`--` flags outright; acli parses straight past them and creates
+      // the item with the flag silently unapplied (verified). Fails closed.
+      const declarable = command.split(/(?:^|\s)--(?:\s|$)/)[0] ?? command;
+      // WHICH repository's vocabulary answers is decided by where the create
+      // is addressed, not by whose config file is nearest. A filing aimed at
+      // another repository used to be judged against this project's role,
+      // which that repository does not carry — and on a JIRA or Linear caller
+      // the demanded token was a workflow STATE, so there was no satisfiable
+      // answer at all. The property is unchanged: a declaration is still
+      // required, wherever the item lands.
+      const { roles, named } = rolesFor(
+        policy,
+        targetRepository({ declarable })
+      );
+      // The role escape is scoped: accepted only where no argv flag on the
+      // mandated client can carry a state, and never on a GitHub target where
+      // the label IS writable and a second weaker spelling would be a hole.
+      const stateRoleOk = policy.stateRoleTracker && named === undefined;
+      const declaresFor = (
+        text: string,
+        against: readonly string[],
+        roleOk: boolean
+      ): boolean =>
+        [...text.matchAll(LABEL_FLAG)].some(match =>
+          (match[2] ?? "")
+            .split(",")
+            .map(part => part.trim())
+            .some(candidate => against.includes(candidate))
+        ) ||
+        declaresHumanGate(text) ||
+        (roleOk && LIFECYCLE_ROLE_READY.test(text)) ||
+        // The container arm. The contradiction check comes first, so a filing
+        // declaring itself both a container and a by-design leaf is refused
+        // rather than allowed on the strength of the half that suits it.
+        (!LEAF_TYPE_FLAG.test(text) && CONTAINER_DECLARATION.test(text));
+      const declares = (text: string): boolean =>
+        declaresFor(text, roles, stateRoleOk);
+      // A creation the command does not spell out itself, because it lives in
+      // a file the command runs or submits. The conjunction may straddle the
+      // two: `curl <endpoint> --data-binary @payload.json` keeps the endpoint
+      // in argv and the mutation in the file.
+      const fromFile = inline
+        ? undefined
+        : (await namedFiles({ text: command })).flatMap(file => {
+            const signature =
+              CREATION_SIGNATURES.find(entry => entry.re.test(file.text))
+                ?.name ??
+              (GRAPHQL_CREATE.test(file.text) &&
+              (TRACKER_ENDPOINT.test(file.text) ||
+                TRACKER_ENDPOINT.test(command))
+                ? "a tracker creation"
+                : undefined);
+            if (signature === undefined) return [];
+            // WHOSE vocabulary answers is decided by where the create inside
+            // the FILE is addressed, not by the command that ran it. `bash
+            // create.sh` names no repository, so reading the target from the
+            // command let a script doing `gh issue create --repo <other>` be
+            // waved through by this project's own lifecycle role — a role the
+            // other repository's build queue never reads.
+            const fileTarget = targetRepository({ declarable: file.text });
+            const scoped = rolesFor(policy, fileTarget);
+            const fileRoleOk =
+              policy.stateRoleTracker && scoped.named === undefined;
+            // A label rather than a marker, and the looseness is forced by
+            // this port's stated invariant. It matches raw text rather than
+            // tokenising, so it cannot attribute a label to ONE create inside
+            // a file. Accepting only whole-scope markers would refuse an
+            // honest single-create script that carries its label — a false
+            // refusal on the honest path, the failure mode this guard exists
+            // to remove. The cost is a decoy: a labelled create alongside an
+            // undeclared one in the same file passes here. The canonical guard
+            // refuses that, and this port is documented as never being
+            // STRICTER than the canonical guard, only ever looser.
+            if (declaresFor(file.text, scoped.roles, fileRoleOk)) return [];
+            return [`${signature} inside ${file.path}`];
+          })[0];
+      const signatureName = inline?.name ?? fromFile;
+      if (signatureName === undefined) return;
+      if (declares(declarable)) return;
+      if (named !== undefined)
+        throw new Error(
+          [
+            `block-direct-issue-create: refusing ${signatureName} — this filing declares no readiness.`,
+            "",
+            "WHY: a work item filed without the build-ready role is an incomplete",
+            "handoff. Build-intake scans the ready lane and nothing else, so nothing",
+            "will ever pick it up: the write succeeds and the work still dies.",
+            "",
+            `THIS FILING IS ADDRESSED AT ANOTHER REPOSITORY: ${named}.`,
+            "That repository runs its own build queue off its own ready role, so this",
+            "project's role does not answer for it — and this project's filing flow",
+            "writes to this project's tracker, so it cannot reach the target at all.",
+            "",
+            "FILE IT THE SANCTIONED WAY:",
+            "",
+            "1. An upstream defect or hardening report. Use the upstream filing path,",
+            "   which composes a redacted, public-safe body through an allowlist",
+            "   projection instead of free-form prose:",
+            "",
+            "     bunx @codyswann/lisa file-upstream --input <filing-event>.json",
+            "",
+            "   lisa-persist-learning step 6 runs exactly this, headless, on a cron.",
+            "2. If you must run the CLI directly, the command has to carry the TARGET",
+            `   repository's build-ready role — ${roles.join(", ")} — as the value of a`,
+            "   --label flag. Configure it as hardening.upstreamReadyRole when the",
+            "   target renamed its lane.",
+            "",
+            `DO NOT reach for ${HUMAN_GATE_MARKER} to get past this one. It still`,
+            "satisfies the guard, but on an upstream defect report it is a false",
+            "declaration: the target's build queue scans the ready role and nothing",
+            "else, so the report is filed and never picked up.",
+            "",
+            "OPERATOR ESCAPE: a human can export LISA_ALLOW_DIRECT_ISSUE_CREATE=1 in",
+            "the environment before starting the session. Setting it inline on this",
+            "command is deliberately refused.",
+          ].join("\n")
+        );
+      throw undeclaredRefusal({
+        readFrom: [
+          "WHERE THE DECLARATION IS READ FROM: the command, and the contents of any",
+          "file it runs or submits. Moving the create into a script no longer moves",
+          "it out of sight, so the declaration can live wherever the create does.",
+        ],
+        resolved: policy,
+        signatureName,
+      });
+    },
+  };
+};

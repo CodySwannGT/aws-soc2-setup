@@ -1,47 +1,99 @@
 # BEGIN: AI GUARDRAILS 
 
-# Detect package manager (check if tool is available before using it)
-# Priority: bun > yarn > npm (bun first since package.json engines prefer it)
-if ([ -f "bun.lockb" ] || [ -f "bun.lock" ]) && command -v bun >/dev/null 2>&1; then
-  PACKAGE_MANAGER="bun"
-  EXECUTOR="bunx"
-elif [ -f "yarn.lock" ] && command -v yarn >/dev/null 2>&1; then
-  PACKAGE_MANAGER="yarn"
-  EXECUTOR="yarn"
-elif [ -f "package-lock.json" ]; then
+# --- lisa:pm-detect ---
+# Detect the package manager this project wants, honoring explicit opt-outs.
+# Precedence: packageManager field > engines "please-use-<pm>" sentinel >
+# lockfile presence (minus any PM the engines forbid) > npm default.
+#
+# The order this replaced claimed to come from `package.json` engines and never
+# read them. Two things were wrong with that. It keyed on lockfile presence
+# ALONE, which is the one thing this product's own installer hook says it must
+# not do: an npm-only project (engines.bun = "please-use-npm", CI runs
+# `npm ci`) that picks up a stray bun.lock gets bun here and npm there, so two
+# Lisa components in one repository disagree about which manager runs the
+# gates. And the justification described LISA's package.json, copied verbatim
+# into repositories whose engines say something else entirely.
+#
+# `pnpm` was absent from the chain, so a pnpm project matched no branch and
+# fell through to npm. Seven sibling detectors in this product already know
+# `pnpm-lock.yaml`; this family was the only one that did not.
+#
+# Kept in step with `install-pkgs.sh`, deliberately: the two must agree, and
+# the failure mode of drift is silent disagreement rather than an error.
+lisa_detect_pm() {
+  _field="" _forced="" _forbidden=""
+  if [ -f package.json ] && command -v jq >/dev/null 2>&1; then
+    _field=$(jq -r '(.packageManager // "") | sub("@.*$";"")' package.json 2>/dev/null)
+    _forced=$(jq -r 'first((.engines // {})[] | strings | capture("please-use-(?<pm>bun|npm|yarn|pnpm)")?.pm) // ""' package.json 2>/dev/null)
+    _forbidden=$(jq -r '[(.engines // {}) | to_entries[] | select(((.value|strings) // "") | test("please-use|do-not-use";"i")) | .key] | join(" ")' package.json 2>/dev/null)
+  fi
+  case "$_field" in bun | npm | yarn | pnpm) printf '%s\n' "$_field"; return 0 ;; esac
+  case "$_forced" in bun | npm | yarn | pnpm) printf '%s\n' "$_forced"; return 0 ;; esac
+  _pm_allowed() { case " $_forbidden " in *" $1 "*) return 1 ;; *) return 0 ;; esac; }
+  if { [ -f bun.lockb ] || [ -f bun.lock ]; } && _pm_allowed bun; then printf 'bun\n'; return 0; fi
+  if [ -f pnpm-lock.yaml ] && _pm_allowed pnpm; then printf 'pnpm\n'; return 0; fi
+  if [ -f yarn.lock ] && _pm_allowed yarn; then printf 'yarn\n'; return 0; fi
+  if [ -f package-lock.json ] && _pm_allowed npm; then printf 'npm\n'; return 0; fi
+  printf 'npm\n'
+}
+
+PACKAGE_MANAGER="$(lisa_detect_pm)"
+# A manager that is not installed is NAMED, never silently swapped. The branch
+# this replaced answered "npm" for three different inputs — a pnpm project, a
+# bun project on a machine without bun, a yarn project without yarn — and
+# printed that answer as a detection. A confident wrong tool at commit time
+# costs more than a named fallback.
+if ! command -v "$PACKAGE_MANAGER" >/dev/null 2>&1; then
+  echo "⚠️  $PACKAGE_MANAGER is this project's package manager but is not on PATH; running gates with npm instead."
   PACKAGE_MANAGER="npm"
-  EXECUTOR="npx"
-else
-  # Default to npm if no lock file is found or tool is not available
-  PACKAGE_MANAGER="npm"
-  EXECUTOR="npx"
 fi
+case "$PACKAGE_MANAGER" in
+  bun) RUNNER="bun run"; EXECUTOR="bunx" ;;
+  pnpm) RUNNER="pnpm run"; EXECUTOR="pnpm exec" ;;
+  yarn) RUNNER="yarn"; EXECUTOR="yarn" ;;
+  *) RUNNER="npm run"; EXECUTOR="npx" ;;
+esac
+# --- end lisa:pm-detect ---
 
 # Get the commit message file path
 COMMIT_MSG_FILE=$1
 
-# Get the current branch name
-BRANCH_NAME=$(git branch --show-current)
+WORK_ITEM_SCRIPT="node_modules/@codyswann/lisa/all/copy-overwrite/scripts/lisa-work-item.mjs"
+if [ ! -f "$WORK_ITEM_SCRIPT" ]; then
+  WORK_ITEM_SCRIPT="scripts/lisa-work-item.mjs"
+fi
+if [ ! -f "$WORK_ITEM_SCRIPT" ]; then
+  WORK_ITEM_SCRIPT="all/copy-overwrite/scripts/lisa-work-item.mjs"
+fi
 
-# Extract Jira key from branch name if present
-# Default pattern matches common Jira project keys (2-10 uppercase letters followed by a hyphen and numbers)
-# Can be overridden with JIRA_PROJECT_KEY environment variable (e.g., JIRA_PROJECT_KEY="SE|PROJ|ABC")
-JIRA_PROJECT_KEY=${JIRA_PROJECT_KEY:-"[A-Z]{2,10}"}
+# Several INDEPENDENT gate families bite at this one moment, and each of the
+# checks below knows only its own. Whichever refuses first, the operator is told
+# about ALL of them here — otherwise satisfying every requirement the refusal
+# names still says nothing about whether the commit will be accepted, which is
+# exactly the property those checklists exist to provide. Owned by neither
+# check, because neither can know what the other installs.
+GATE_FAMILIES_SCRIPT="node_modules/@codyswann/lisa/all/copy-overwrite/scripts/lisa-commit-msg-gates.mjs"
+if [ ! -f "$GATE_FAMILIES_SCRIPT" ]; then
+  GATE_FAMILIES_SCRIPT="scripts/lisa-commit-msg-gates.mjs"
+fi
+if [ ! -f "$GATE_FAMILIES_SCRIPT" ]; then
+  GATE_FAMILIES_SCRIPT="all/copy-overwrite/scripts/lisa-commit-msg-gates.mjs"
+fi
 
-# Extract Jira key from branch name using grep
-# Matches patterns like: feat/SE-2397-description, SE-2397-description, chore/PROJ-123-something
-JIRA_KEY=$(echo "$BRANCH_NAME" | grep -E "(^|/)($JIRA_PROJECT_KEY)-[0-9]+" | grep -E "($JIRA_PROJECT_KEY)-[0-9]+" -o | head -1)
+# Never the reason a commit fails: the caller has already decided to refuse.
+lisa_commit_gate_families() {
+  [ -f "$GATE_FAMILIES_SCRIPT" ] || return 0
+  command -v node >/dev/null 2>&1 || return 0
+  node "$GATE_FAMILIES_SCRIPT" list --hook "$0" --refused "$1" 2>/dev/null || true
+}
 
-if [ -n "$JIRA_KEY" ]; then
-  # Read the current commit message
-  COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
-  
-  # Check if the Jira key is already in the commit message
-  if ! echo "$COMMIT_MSG" | grep -q "\[$JIRA_KEY\]"; then
-    # Append the Jira key to the commit message
-    echo "$COMMIT_MSG [$JIRA_KEY]" > "$COMMIT_MSG_FILE"
-    echo "🎫 Auto-appended Jira key: [$JIRA_KEY]"
-  fi
+if ! command -v node >/dev/null 2>&1; then
+  echo "❌ Commit blocked: Node.js is required to validate tracker work items."
+  exit 1
+fi
+if ! node "$WORK_ITEM_SCRIPT" validate-commit "$COMMIT_MSG_FILE"; then
+  lisa_commit_gate_families traceability
+  exit 1
 fi
 
 echo "📝 Validating commit message with commitlint..."
@@ -63,39 +115,177 @@ if [ $? -ne 0 ]; then
   echo "Format: <type>(<optional scope>): <subject>"
   echo ""
   echo "For more info, see: https://www.conventionalcommits.org/"
+  lisa_commit_gate_families commit-conformance
   exit 1
 fi
 
 # Check for Co-Authored-By line (skip for merge commits)
 COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+# `printf '%s\n'`, never `echo "$COMMIT_MSG"`. Under a POSIX/XSI `echo` the
+# backslash escapes are interpreted, and `\c` means "stop output here" — so a
+# message containing `\copy`, `\cite`, or a Windows path like `C:\config` is
+# silently truncated at that point before grep ever sees it. The
+# `Co-Authored-By:` trailer is always the last line, so it is always the part
+# lost, and the hook then rejects a commit whose trailer is present and
+# correctly formatted while pointing the author at the trailer.
 
 # Skip AI co-authorship check for merge commits (e.g., from git pull)
-if echo "$COMMIT_MSG" | grep -qE "^Merge (branch|pull request|remote-tracking)"; then
+if printf '%s\n' "$COMMIT_MSG" | grep -qE "^Merge (branch|pull request|remote-tracking)"; then
   echo "🔀 Merge commit detected, skipping AI co-authorship check"
   exit 0
 fi
 
 # Skip AI co-authorship check for automated release commits (e.g., from standard-version in CI)
-if echo "$COMMIT_MSG" | grep -qE "^chore\(release\):"; then
+if printf '%s\n' "$COMMIT_MSG" | grep -qE "^chore\(release\):"; then
   echo "🚀 Release commit detected, skipping AI co-authorship check"
   exit 0
 fi
 
 echo "🤖 Checking for AI co-authorship..."
 
-# Accept attribution from any supported coding agent (Claude or Codex),
-# case-insensitively. Claude Code emits "Co-Authored-By: Claude"; the Codex CLI
-# emits "Co-authored-by: Codex <noreply@openai.com>".
-if ! echo "$COMMIT_MSG" | grep -Eiq "Co-authored-by:.*(Claude|Codex)"; then
+# Fleet agents — the runtimes Lisa ships plugin distributions for — pass on
+# the trailer alone. Any other co-author — an agent Lisa does not distribute
+# to (e.g. Devin) OR A HUMAN — also requires the AI-Agent/AI-Model/AI-Effort
+# block: the gate enforces attribution, not agent gatekeeping, and a trailer
+# name cannot tell a human from a non-fleet agent, so both are held to the
+# same rule. The AI-* trailers describe the commit's DRIVER, not every
+# co-author — a human pairing alongside an agent is covered by the agent's
+# block, while a commit with ONLY a human co-author is refused by the check
+# below: its AI-Agent trailer must name a listed co-author, and a human-only
+# trailer block has no agent to name. (A human could still write
+# "AI-Agent: <their own name>" to self-attest as the agent — the trailer is
+# the attestation surface, not a proof, so the gate documents rather than
+# polices that.) CodySwannGT/lisa#4282, CodySwannGT/lisa#4294.
+LISA_FLEET_AGENT_RE="Claude|Codex|Cursor|OpenCode|Antigravity|Copilot"
+# Co-authors come from the message's trailer block via git-interpret-trailers —
+# a "Co-authored-by:" string inside prose is not attribution — and every entry
+# is judged on its own, so a fleet trailer can never cover a sibling trailer
+# whose agent owes metadata. The AI-* checks below read the SAME parsed
+# trailer block, so an "AI-Agent:" line in body prose cannot satisfy them.
+ALL_TRAILERS=$(git interpret-trailers --parse "$COMMIT_MSG_FILE" 2>/dev/null || true)
+COAUTHOR_TRAILERS=$(printf '%s\n' "$ALL_TRAILERS" | grep -iE "^Co-authored-by:" || true)
+
+if ! printf '%s\n' "$COAUTHOR_TRAILERS" | grep -Eiq "Co-authored-by:"; then
+  no_coauthor=1
+else
+  no_coauthor=0
+fi
+
+nonfleet_coauthor=0
+if [ "$no_coauthor" -eq 0 ]; then
+  while IFS= read -r trailer; do
+    [ -z "$trailer" ] && continue
+    agent_name=$(printf '%s' "${trailer#*:}" | sed -e 's/<[^>]*>//g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    if ! printf '%s\n' "$agent_name" | grep -Eiq "^(${LISA_FLEET_AGENT_RE})([[:space:]]|$)"; then
+      nonfleet_coauthor=1
+    fi
+  done <<LISA_COAUTHOR_TRAILERS
+$COAUTHOR_TRAILERS
+LISA_COAUTHOR_TRAILERS
+fi
+
+if [ "$nonfleet_coauthor" -eq 1 ]; then
+  missing_agent_metadata=0
+  for trailer in AI-Agent AI-Model AI-Effort; do
+    if ! printf '%s\n' "$ALL_TRAILERS" | grep -Eiq "^${trailer}:[[:space:]]*[^[:space:]]"; then
+      missing_agent_metadata=1
+    fi
+  done
+  # The AI-Agent trailer must also NAME one of the listed co-authors —
+  # metadata attesting to nobody in the trailer block is not attribution.
+  # Compare against the extracted NAME (the same "strip email" transform the
+  # co-author loop above applies), not the raw trailer line: a substring
+  # match would let "AI-Agent: Co-authored-by" satisfy the check without
+  # naming anyone.
+  ai_agent=$(printf '%s\n' "$ALL_TRAILERS" | grep -iE "^AI-Agent:" | head -1 | sed -E 's/^[^:]+:[[:space:]]*//;s/[[:space:]]*$//')
+  if [ -n "$ai_agent" ]; then
+    ai_agent_lc=$(printf '%s' "$ai_agent" | tr '[:upper:]' '[:lower:]')
+    ai_agent_names_someone=0
+    while IFS= read -r trailer; do
+      [ -z "$trailer" ] && continue
+      coauthor_name=$(printf '%s' "${trailer#*:}" | sed -e 's/<[^>]*>//g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+      if [ "$coauthor_name" = "$ai_agent_lc" ]; then
+        ai_agent_names_someone=1
+      fi
+    done <<LISA_COAUTHOR_NAME_CHECK
+$COAUTHOR_TRAILERS
+LISA_COAUTHOR_NAME_CHECK
+    if [ "$ai_agent_names_someone" -eq 0 ]; then
+      missing_agent_metadata=1
+    fi
+  fi
+  if [ "$missing_agent_metadata" -eq 1 ]; then
+    echo ""
+    echo "❌ Non-fleet agents must include AI metadata trailers!"
+    echo ""
+    echo "Agents outside the supported fleet (Claude, Codex, Cursor, OpenCode,"
+    echo "Antigravity, Copilot) must carry provenance metadata alongside the"
+    echo "Co-authored-by trailer — this includes a human co-author, who is"
+    echo "covered by the driving agent's AI-Agent/AI-Model/AI-Effort block:"
+    echo "  AI-Agent: <agent name>"
+    echo "  AI-Model: <provider/model>"
+    echo "  AI-Effort: <effort or runtime value>"
+    echo ""
+    echo "The AI-Agent value must name one of the commit's Co-authored-by"
+    echo "entries — it attests to which listed author is the driving agent."
+    echo ""
+    lisa_commit_gate_families ai-coauthorship
+    exit 1
+  fi
+elif [ "$no_coauthor" -eq 1 ]; then
   echo ""
   echo "❌ Commit message must include AI co-authorship!"
   echo ""
-  echo "All commits must include a Co-authored-by line for a coding agent (Claude or Codex)."
+  echo "All commits must include a Co-authored-by line for a supported coding agent."
+  echo ""
+  echo "Expected one of these trailers:"
+  echo "  Co-authored-by: Claude <noreply@anthropic.com>"
+  echo "  Co-authored-by: Codex <codex@openai.com>"
+  echo "  Co-authored-by: Cursor <noreply@cursor.com>"
+  echo "  Co-authored-by: OpenCode <noreply@opencode.ai>"
+  echo "  Co-authored-by: Antigravity <noreply@google.com>"
+  echo "  Co-authored-by: Copilot <noreply@github.com>"
+  echo ""
+  echo "OpenCode commits must also include:"
+  echo "  AI-Agent: OpenCode"
+  echo "  AI-Model: <provider/model>"
+  echo "  AI-Effort: <effort or runtime value>"
+  echo ""
+  echo "Agents outside the supported fleet (e.g. Devin) may commit by supplying"
+  echo "the same AI-Agent/AI-Model/AI-Effort trailers with their own agent name."
   echo ""
   echo "If you're using Claude Code, use the /git:commit command"
   echo "If you're using Codex, enable commit_attribution in .codex/config.toml"
+  echo "If you're using OpenCode, include the OpenCode trailer and AI-* metadata"
   echo ""
+  lisa_commit_gate_families ai-coauthorship
   exit 1
+fi
+
+if printf '%s\n' "$COAUTHOR_TRAILERS" | grep -Eiq "Co-authored-by:.*OpenCode"; then
+  missing_opencode_metadata=0
+  if ! printf '%s\n' "$ALL_TRAILERS" | grep -Eiq "^AI-Agent:[[:space:]]*OpenCode[[:space:]]*$"; then
+    missing_opencode_metadata=1
+  fi
+  if ! printf '%s\n' "$ALL_TRAILERS" | grep -Eiq "^AI-Model:[[:space:]]*[^[:space:]].*$"; then
+    missing_opencode_metadata=1
+  fi
+  if ! printf '%s\n' "$ALL_TRAILERS" | grep -Eiq "^AI-Effort:[[:space:]]*[^[:space:]].*$"; then
+    missing_opencode_metadata=1
+  fi
+
+  if [ "$missing_opencode_metadata" -eq 1 ]; then
+    echo ""
+    echo "❌ OpenCode commits must include AI metadata trailers!"
+    echo ""
+    echo "Expected trailers:"
+    echo "  AI-Agent: OpenCode"
+    echo "  AI-Model: <provider/model>"
+    echo "  AI-Effort: <effort or runtime value>"
+    echo ""
+    lisa_commit_gate_families ai-coauthorship
+    exit 1
+  fi
 fi
 
 # END: AI GUARDRAILS

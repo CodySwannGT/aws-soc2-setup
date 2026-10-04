@@ -9,5 +9,70 @@
       "production": "main"
     }
   },
-  "harness": "fleet"
+  "harness": "fleet",
+  "gates": {
+    "runner": "bun run",
+    "traceability": {
+      "push": "required",
+      "pull-request": "required"
+    },
+    "type-correctness": {
+      "push": "required",
+      "pull-request": "required"
+    },
+    "code-style-slow": {
+      "push": "required",
+      "pull-request": "required"
+    },
+    "dead-code": {
+      "push": {
+        "level": "required",
+        "run": "knip:check"
+      },
+      "pull-request": {
+        "level": "required",
+        "run": "knip:check"
+      }
+    },
+    "test-correctness": {
+      "push": {
+        "level": "required",
+        "run": "test:cov:unit"
+      },
+      "pull-request": {
+        "level": "required",
+        "run": "test:cov"
+      }
+    },
+    "coverage-adequacy": {
+      "push": {
+        "level": "required",
+        "run": "test:cov:unit"
+      }
+    },
+    "test-integration": {
+      "push": "required",
+      "pull-request": "required"
+    },
+    "code-style": {
+      "pull-request": "required"
+    },
+    "build-integrity": {
+      "pull-request": "required"
+    },
+    "format-conformance": {
+      "pull-request": "required"
+    },
+    "test-meaningfulness": {
+      "pull-request": "required"
+    },
+    "test-node-suites": {
+      "pull-request": "off"
+    }
+  },
+  "github": {
+    "org": "CodySwannGT",
+    "repo": "aws-soc2-setup"
+  },
+  "tracker": "github"
 }

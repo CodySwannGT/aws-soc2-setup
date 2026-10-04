@@ -1,6 +1,6 @@
 ---
 name: lisa-queue-status
-description: "Read-only operator surface for the current project's PRD and build backlog health. Resolves the configured PRD source and build tracker from the same Lisa contract used by intake and repair, summarizes lifecycle-role counts, distinguishes idle queues from setup problems, and highlights actionable blocked, in-review, claimed, or shipped work."
+description: "Read-only operator surface for…"
 allowed-tools: ["Skill", "Bash", "Read"]
 ---
 
@@ -58,13 +58,50 @@ Render the report in **grouped sections** so operators can scan it top-down with
 For each inspected queue, report:
 
 1. The queue source or tracker Lisa resolved.
-2. Lifecycle counts using the repo's configured role names.
-3. Whether the queue appears `IDLE`, `HEALTHY`, `ATTENTION_NEEDED`, or `MISCONFIGURED`.
-4. Whether the lifecycle namespace appears adopted versus absent.
-5. The oldest or most actionable blocked, in-review, claimed, shipped, or similar stuck items Lisa can surface without mutating work.
-6. A concise remediation hint when attention is needed.
+2. For GitHub, both `Identity repo: <owner/repo>` and `Queue repo: <owner/repo>`, even when equal.
+3. Lifecycle counts using the repo's configured role names. GitHub umbrella-queue build counts
+   must be scoped to `repo:<currentRepo>` from the repo-scoping ladder; the queue repo is never
+   current-repo identity.
+4. Whether the queue appears `IDLE`, `HEALTHY`, `ATTENTION_NEEDED`, or `MISCONFIGURED`.
+5. Whether the lifecycle namespace appears adopted versus absent.
+6. The oldest or most actionable blocked, in-review, claimed, shipped, or similar stuck items Lisa can surface without mutating work.
+7. A concise remediation hint when attention is needed.
 
 The report should stay terminal-first and immediately actionable: observable queue facts first, then the smallest useful next step.
+
+## Delivery effort
+
+Alongside queue counts, run the read-only `lisa effectiveness report`. Show observed
+human interventions per accepted outcome, its numerator/denominator, and evidence
+sources. State that this covers locally observed outcomes; absent reports or null
+attention mean **unknown**, not zero. If queue-wide coverage has not been verified,
+do not imply the ratio describes the whole queue. Show the separate run clocks and
+committed recurring-failure counts when present. Do not create reports, change
+tracker state, or use PR/token counts as outcome-value proxies from this skill.
+
+## Pull request arming (#3903)
+
+Alongside the two work queues, report the **arming state of the repo's open pull requests**. A PR whose `autoMergeRequest` is `null` is fully green and permanently unmergeable: every check passes, `mergeStateStatus` is green, nothing complains, and it waits forever. Green-and-unarmed and green-and-waiting read identically on every other surface, so this is the one place that asks the question.
+
+Run the sweep rather than eyeballing the list — an LLM reading PR pages one at a time is exactly the shell-loop-by-prose failure #3512 records:
+
+```bash
+gh pr list --state open --limit 200 \
+  --json number,title,url,isDraft,labels,body,autoMergeRequest \
+  | node "${CLAUDE_PLUGIN_ROOT}/scripts/pr-arming-sweep.mjs"
+```
+
+Report the verdict verbatim, and never translate it into an absence:
+
+- `MEASURED_CLEAN` — a **positive assertion**: N open PRs were read and every one is armed or deliberately unarmed. Say the count. "Nothing to report" is not the same sentence and must not be substituted for it.
+- `UNARMED_PRS_FOUND` — list each PR. The next step is `gh pr merge <n> --auto --merge` **followed by reading the state back** (`gh pr view <n> --json autoMergeRequest`); arming can be silently dropped after the fact, so an arm that was not read back is not a fact.
+- `NOT_MEASURED` — the arming state was **not read** for at least one PR (usually a `--json` selection missing `autoMergeRequest`). This is an unanswered question, not a clean queue. Fix the query and re-run; do **not** report the queue as healthy.
+
+Arming state feeds no queue verdict and gates nothing — this stays a report, per #3903's Out of Scope. Never arm a PR from this skill; `/lisa:queue-status` is read-only.
+
+A PR deliberately left for a human (`lisa-drive-pr-to-merge`'s `auto_merge=false` mode) declares itself with the `lisa:auto-merge-off` label or a `[lisa-auto-merge-off] reason=<text>` body marker. Drafts are excluded — GitHub will not arm a draft.
+
+**Held PRs are suppressed from the findings, never from the report.** Always show the `Held (declared, not merging): N` block and the numbers under it, including when the verdict is `MEASURED_CLEAN`. This is a one-label remedy for a red sweep and it will look like housekeeping to whoever applies it — "4 armed, 0 unarmed" and "4 armed, 0 unarmed, 9 held" describe very different queues, and only the second lets an operator notice the label spreading. Flag it when holds outnumber armed PRs, or when several read `no reason declared`.
 
 ## Highlight semantics
 
@@ -92,6 +129,11 @@ Queue sections should stay visually grouped. Do not interleave PRD and build fac
 ## Runtime and vendor expectations
 
 - Reuse the same config-resolution defaults and queue-routing rules that `intake` and `repair-intake` use.
+- For GitHub, resolve an explicit repo/URL first, then merged `github.queueRepo`, then
+  `github.org/github.repo`; accept a short queueRepo by normalizing it to `github.org`.
+- Pass the contract's `currentRepo` into `readGithubBuildQueueSnapshot`; lifecycle counts include
+  only `repo:<current>` work. Report its `unscopedCount` / `unscopedCandidates` separately because
+  intake still needs to determine and stamp unlabeled work; exclude sibling-only issues.
 - Work from the current repo's `.lisa.config.json` instead of hardcoding one vendor's lifecycle names.
 - Support the vendor families already served by Lisa intake: GitHub, Linear, JIRA, Notion, and Confluence.
 - If a queue cannot be resolved or its lifecycle namespace has not been adopted, report that explicitly as `MISCONFIGURED` rather than pretending the queue is empty.

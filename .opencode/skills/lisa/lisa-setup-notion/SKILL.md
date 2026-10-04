@@ -1,6 +1,6 @@
 ---
 name: lisa-setup-notion
-description: "Configure Notion as the PRD source for this project. Walks the user through creating an internal integration in the target workspace, sharing the PRD database with it, stores the resulting `ntn_*` token in OS keychain (multi-workspace-safe — keyed by workspaceId), validates against the Notion API, and writes `notion.workspaceId`, `notion.prdDatabaseId`, and `notion.values` into `.lisa.config.json`. Idempotent — re-runs update the existing section rather than duplicating it. Offers to set top-level `source: \"notion\"`."
+description: "Configure Notion as the PRD…"
 allowed-tools: ["Bash", "Read", "Write", "Edit", "Skill", "AskUserQuestion"]
 ---
 
@@ -51,7 +51,7 @@ Print instructions for the user:
 
 The user picks a stable identifier for this workspace. Two options:
 
-- **Workspace name** (human-readable, e.g., `Gemini Sports`). Easy to recognize, can be ambiguous if a workspace is renamed in Notion. Recommended.
+- **Workspace name** (human-readable, e.g., `AcmeOrgB`). Easy to recognize, can be ambiguous if a workspace is renamed in Notion. Recommended.
 - **Workspace UUID** (returned by Notion's API). Stable but opaque.
 
 Default to the workspace name. After the user stores the token (Step 4), Step 5's `/users/me` call surfaces the actual `bot.workspace_name`; if it differs from what the user typed (capitalization, trailing whitespace), prompt to confirm.
@@ -60,7 +60,7 @@ Default to the workspace name. After the user stores the token (Step 4), Step 5'
 WORKSPACE=$(jq -r '.notion.workspaceId // empty' .lisa.config.json 2>/dev/null)
 if [ -z "$WORKSPACE" ]; then
   # Prompt the user — accept any non-empty string. They pick the slug; we just store it.
-  read -p "Workspace identifier (any stable slug, e.g. 'gemini-sports'): " WORKSPACE
+  read -p "Workspace identifier (any stable slug, e.g. 'acme-org-b'): " WORKSPACE
 fi
 ```
 
@@ -164,15 +164,64 @@ read_notion_token() {
   local slug=$(echo "$workspace" | tr '[:upper:]-' '[:lower:]_')
   local varname="NOTION_API_TOKEN_${slug}"
   [ -n "${!varname}" ] && { echo "${!varname}"; return; }
+  # Preferred path: the single secrets chokepoint. It owns the one-store rule
+  # and the surface ladder, so anything it can answer must not be read out of an
+  # OS keychain here — a second reader is how the same credential ends up living
+  # in two places and drifting. Keep the LADDER below identical to
+  # `notion-access`; the tail may differ, because this skill falls through to a
+  # legacy keychain rung and that one does not. Saying "the ladder" rather
+  # than "this function" is deliberate — the old wording asked for something
+  # unachievable, and an unachievable rule is one that gets quietly dropped.
+  #
+  # Ordered across trusted machine-managed substrates, ending at the installed
+  # package. Checkout-local paths are deliberately absent: a familiar generated
+  # destination is still repository-controlled executable code. The plugin
+  # rungs are the floor: `resolve-secret.mjs` ships beside this skill, so a rung
+  # pointing at it is reachable from anywhere the plugin itself is installed.
+  # Without one, a consumer repository that vendors none of the leading paths
+  # never reaches a resolver at all — the ladder exits without having asked
+  # anything, which is what pushed agents into improvising their own credential
+  # lookups. This LADDER is identical in every skill that resolves a credential
+  # and `credential-resolver-ladder` fails if any copy diverges. Only what
+  # happens AFTER the ladder may differ between them.
+  # Execute only machine-managed plugin/package resolvers. Checkout-local
+  # candidates are repository-controlled code, not trusted merely by path.
+  local candidates=()
+  if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+    candidates+=("$CLAUDE_PLUGIN_ROOT/skills/lisa-secrets-access/scripts/resolve-secret.mjs")
+  fi
+  if [ -n "${PLUGIN_ROOT:-}" ]; then
+    candidates+=("$PLUGIN_ROOT/skills/lisa-secrets-access/scripts/resolve-secret.mjs")
+  fi
+  # Last rung deliberately needs no environment variable: an agent that was
+  # never handed a plugin root still has the installed package to fall back on.
+  candidates+=(node_modules/@codyswann/lisa/plugins/lisa/skills/lisa-secrets-access/scripts/resolve-secret.mjs)
+
+  local resolver
+  local tried=()
+  for resolver in "${candidates[@]}"; do
+    tried+=("$resolver")
+    if [ -f "$resolver" ]; then
+      local via_lisa
+      via_lisa=$(node "$resolver" get NOTION_API_TOKEN 2>/dev/null) \
+        && [ -n "$via_lisa" ] && { echo "$via_lisa"; return; }
+      # Empty/error means this substrate had no answer; try the next trusted one.
+    fi
+  done
+  # Legacy fallback: the OS keychain written by the guided flow below, for
+  # projects that have not adopted a credentials provider. Reached only when the
+  # chokepoint is absent or has no entry.
+  local from_keychain=""
   case "$(uname -s)" in
-    Darwin)  security find-generic-password -s lisa-notion -a "$workspace" -w 2>/dev/null ;;
-    Linux)   command -v secret-tool >/dev/null && secret-tool lookup service lisa-notion account "$workspace" 2>/dev/null ;;
+    Darwin)  from_keychain=$(security find-generic-password -s lisa-notion -a "$workspace" -w 2>/dev/null) ;;
+    Linux)   command -v secret-tool >/dev/null && \
+             from_keychain=$(secret-tool lookup service lisa-notion account "$workspace" 2>/dev/null) ;;
     MINGW*|MSYS*|CYGWIN*)
       # `cmdkey /generic ... /pass:` stores the secret in Windows Credential Manager, but
       # `cmdkey /list` never prints stored passwords (by design). Read the CredentialBlob
       # back via the Win32 CredRead API through PowerShell; pass the target name via an env
       # var to dodge nested quoting, and strip the CRLF powershell.exe appends.
-      LISA_CRED_TARGET="lisa-notion-${workspace}" powershell.exe -NoProfile -NonInteractive -Command '
+      from_keychain=$(LISA_CRED_TARGET="lisa-notion-${workspace}" powershell.exe -NoProfile -NonInteractive -Command '
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -198,8 +247,19 @@ public static class LisaCred {
   }
 }
 "@
-[LisaCred]::Read($env:LISA_CRED_TARGET)' 2>/dev/null | tr -d '\r' ;;
+[LisaCred]::Read($env:LISA_CRED_TARGET)' 2>/dev/null | tr -d '\r') ;;
   esac
+  [ -n "$from_keychain" ] && { echo "$from_keychain"; return; }
+
+  # Name every path. A bare `return 1` sends the next reader hunting for a
+  # resolver they cannot see the absence of; the enumeration turns that into a
+  # seconds-long diagnosis. Paths and store coordinates only — never any
+  # resolved value, on any path.
+  echo "Error: could not resolve NOTION_API_TOKEN through lisa-secrets-access or the legacy keychain." >&2
+  echo "Tried, in order (relative paths are from $PWD):" >&2
+  printf '  %s\n' "${tried[@]}" >&2
+  echo "  <OS keychain> service=lisa-notion account=$workspace" >&2
+  return 1
 }
 
 TOKEN=$(read_notion_token "$WORKSPACE")

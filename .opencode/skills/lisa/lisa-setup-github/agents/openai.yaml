@@ -1,4 +1,4 @@
 display_name: "Setup Github"
-short_description: "Configure GitHub Issues as the destination tracker and/or the PRD source for this project"
+short_description: "Configure GitHub Issues as the…"
 default_prompt:
-  - "Use $lisa-setup-github: Configure GitHub Issues as the destination tracker and/or the PRD source for this project."
+  - "Use $lisa-setup-github: Configure GitHub Issues as the…."

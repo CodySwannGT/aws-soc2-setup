@@ -1,11 +1,11 @@
 ---
 name: lisa-setup-wiki
-description: "Scaffold, repair, verify, or upgrade the project's LLM Wiki from its config. Alias for lisa-wiki setup in the Lisa setup command family."
+description: "Scaffold, repair, verify, or…"
 ---
 ## Lisa Command Compatibility
 
 - Original Claude command: `/lisa:setup:wiki`
-- OpenCode invocation: `$lisa-setup-wiki` or a plain-English request that matches this skill.
+- Codex invocation: `$lisa-setup-wiki` or a plain-English request that matches this skill.
 - Treat the user's surrounding request as the command arguments.
 - Claude argument hint: `[--upgrade] [--with-ci]`
 
