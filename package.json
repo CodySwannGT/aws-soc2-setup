@@ -85,7 +85,7 @@
   ],
   "types": "./dist/cli.d.ts",
   "name": "@codyswann/aws-soc2-setup",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "Automated AWS Control Tower setup for SOC 2 compliance — account provisioning, IAM Identity Center, security services, backup, and KMS as a typed CLI",
   "type": "module",
   "main": "./dist/cli.js",

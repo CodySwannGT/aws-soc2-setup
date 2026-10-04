@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [1.1.5](https://github.com/CodySwannGT/aws-soc2-setup/compare/v1.1.4...v1.1.5) (2026-10-04)
+
+
+### Bug Fixes
+
+* point package types at the emitted declaration file ([6c31f4e](https://github.com/CodySwannGT/aws-soc2-setup/commit/6c31f4eab73945bd7c53877978cd85f6e3186d13)), closes [CodySwannGT/aws-soc2-setup#29](https://github.com/CodySwannGT/aws-soc2-setup/issues/29)
+* **sso:** read set-start-url's profile from the global --profile ([5d906e5](https://github.com/CodySwannGT/aws-soc2-setup/commit/5d906e5d44a8b9cf6b6692bc1375bf3211d10a33)), closes [CodySwannGT/aws-soc2-setup#29](https://github.com/CodySwannGT/aws-soc2-setup/issues/29)
+
 ### [1.1.4](https://github.com/CodySwannGT/aws-soc2-setup/compare/v1.1.3...v1.1.4) (2026-07-16)
 
 ### [1.1.3](https://github.com/CodySwannGT/aws-soc2-setup/compare/v1.1.2...v1.1.3) (2026-07-11)
