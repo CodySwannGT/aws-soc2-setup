@@ -55,7 +55,7 @@ jobs:
 
   release:
     name: Release
-    uses: CodySwannGT/lisa/.github/workflows/release.yml@main
+    uses: CodySwannGT/lisa/.github/workflows/release.yml@995f533b00d9b8a60256096bf6d28940164cd893 # v4.69.1
     needs: [determine_environment]
     with:
       environment: ${{ needs.determine_environment.outputs.environment }}
