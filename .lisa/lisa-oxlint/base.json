@@ -1,0 +1,43 @@
+{
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "oxc",
+    "import",
+    "jsdoc",
+    "promise"
+  ],
+  "categories": {
+    "correctness": "warn"
+  },
+  "rules": {
+    "no-debugger": "error",
+    "prefer-const": "error",
+    "no-var": "error",
+    "no-console": "off",
+    "no-unused-vars": "off",
+    "max-lines": "off",
+    "max-lines-per-function": "off",
+    "jsdoc/check-tag-names": "off",
+    "jsdoc/check-access": "error",
+    "jsdoc/check-property-names": "error",
+    "jsdoc/empty-tags": "error",
+    "jsdoc/implements-on-classes": "error",
+    "jsdoc/no-defaults": "error",
+    "jsdoc/require-param-name": "error",
+    "jsdoc/require-property": "error",
+    "jsdoc/require-property-name": "error",
+    "jsdoc/require-yields": "error",
+    "jsdoc/require-property-type": "off"
+  },
+  "ignorePatterns": [
+    "build/**",
+    "dist/**",
+    ".build/**",
+    "coverage/**",
+    "node_modules/**",
+    "*.generated.*",
+    "**/__generated__/**",
+    "**/generated/**"
+  ]
+}

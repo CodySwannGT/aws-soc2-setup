@@ -1,12 +1,12 @@
 ---
 name: lisa-github-journey
-description: "Parse a GitHub Issue's Validation Journey section, execute the verification steps using appropriate tools (curl, test commands, database queries), capture evidence at each marker, and post results via lisa-github-evidence. The GitHub counterpart of lisa-jira-journey."
+description: "Parse a GitHub Issue's…"
 allowed-tools: ["Bash", "Read", "Glob", "Grep", "Skill"]
 ---
 
 # GitHub Validation Journey
 
-Parse a GitHub Issue's Validation Journey, execute the verification steps using the appropriate tools for the change type, capture evidence at each `[EVIDENCE: <name>]` marker, and post to the issue + GitHub PR.
+Parse a GitHub Issue's Validation Journey, execute the verification steps using the appropriate tools for the change type, capture evidence at each canonical `[EVIDENCE: <artifact-type>: <name>]` marker (while still accepting the documented legacy untyped form), and post to the issue + GitHub PR.
 
 ## Arguments
 
@@ -51,14 +51,27 @@ Execute each step sequentially. Determine the verification approach based on the
 - **Library/utility changes** → Run tests, capture output.
 - **Security fixes** → Reproduce exploit attempt, verify fix, capture output.
 
-At each `[EVIDENCE: name]` marker, capture stdout/stderr to a numbered file:
+At each typed `[EVIDENCE: <artifact-type>: <name>]` marker, capture an artifact **of the declared type** — the type is the contract, not a suggestion:
+
+- `screenshot` / `recording` → an actual image/video file from the driven UI (Playwright, simulator), never a text description of what was seen
+- `http-transcript` → the exact request (curl command or client call) plus the full response
+- `cli-output` → the command plus stdout/stderr and exit code
+- `log-snippet` → the correlated log lines pulled from the running system
+- `db-query-output` → the query plus returned rows
+- `perf-trace` → the benchmark/frame-timing/profiler output with methodology (device profile, dataset size)
+- `test-run-log` → reporter output naming the spec and showing it ran and passed
+- `deploy-log` / `state-dump` → the deployment/health-check output or observed-state JSON
+
+A prose claim ("the error state rendered gracefully") satisfies no marker. Legacy untyped markers: infer the type from the step's action, capture accordingly, and note the inference. Write each artifact to a numbered file:
+
+Treat only exact `[EVIDENCE: ...]` markers (plus the legacy local `[SCREENSHOT: ...]` form) as capture instructions. Both the canonical `[EVIDENCE-REF: <work-item-ref> | <artifact-type>: <kebab-case-name>]` and the Lisa 2.223.0 legacy alias `[EVIDENCE-REF: <tracker-ref>: <artifact-type>: <kebab-case-name>]` point to another work item's artifact: preserve either as explanatory text, but do not capture it, assign it a sequence number, include it in duplicate-name checks, or count it as a local manifest entry. If a runtime-changing leaf has references but no local claiming marker, stop because S14 is unsatisfied.
 
 #### Evidence Naming Convention
 
 `{NN}-{evidence-name}.txt` (or `.json` for structured data):
 
 - `NN`: zero-padded sequential number (01, 02, 03...).
-- `evidence-name`: the value from `[EVIDENCE: <name>]` (kebab-case).
+- `evidence-name`: the `<name>` part of the typed marker (kebab-case).
 
 Example:
 

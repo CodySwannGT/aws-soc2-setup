@@ -1,4 +1,4 @@
 display_name: "Tracker Validate"
-short_description: "Vendor-neutral wrapper for the pre-write quality gate"
+short_description: "Vendor-neutral wrapper for the…"
 default_prompt:
-  - "Use $lisa-tracker-validate: Vendor-neutral wrapper for the pre-write quality gate."
+  - "Use $lisa-tracker-validate: Vendor-neutral wrapper for the…."

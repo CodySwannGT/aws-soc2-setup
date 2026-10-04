@@ -1,11 +1,11 @@
 ---
 name: lisa-add-ingest
-description: "Scaffold a project-specific front-door ingest skill that does something unique (classify a source, fetch from a special system, stamp domain frontmatter) and then chains into /ingest. Extends ingestion without forking the kernel."
+description: "Scaffold a project-specific…"
 ---
 ## Lisa Command Compatibility
 
 - Original Claude command: `/lisa:add-ingest`
-- OpenCode invocation: `$lisa-add-ingest` or a plain-English request that matches this skill.
+- Codex invocation: `$lisa-add-ingest` or a plain-English request that matches this skill.
 - Treat the user's surrounding request as the command arguments.
 - Claude argument hint: `<short name for the new ingest path>`
 

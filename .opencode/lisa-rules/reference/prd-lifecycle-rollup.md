@@ -1,5 +1,41 @@
 # PRD Lifecycle Rollup & Generated-Top-Level-Work Contract
 
+> Demoted from the always-on eager tier by CodySwannGT/lisa#3992. The
+> section below is the former eager head, preserved verbatim; the full
+> contract follows it. Reachable on demand via [the rule index](../eager/00-rule-index.md).
+
+## PRD Lifecycle Rollup & Generated-Top-Level-Work Contract (load-bearing)
+
+The vendor-neutral source of truth for how a PRD owns the work it generated and how its lifecycle rolls up to `shipped`. Companion to `leaf-only-lifecycle` (which governs build-lifecycle of leaves); this rule governs PRD lifecycle and rollup from generated top-level children.
+
+## Generated top-level work (the contract)
+
+A PRD owns the work units it created **at the top of the hierarchy** — the Epic(s) and any top-level Story it created directly. It does NOT own descendants (Sub-tasks, Stories under an Epic, leaves under a top-level unit) — those are owned by their top-level parent and roll up via `leaf-only-lifecycle`.
+
+Leaf Sub-tasks are **never** direct children of a PRD when a top-level Epic/Story hierarchy exists.
+
+## How each vendor records the PRD→child link
+
+**Native hierarchy first**, machine-readable fallback section always written:
+
+- **GitHub Issues** — native sub-issues when source and tracker are the same repo + supports sub-issues.
+- **Linear** — `parentId` or generated Project grouping where the PRD also lives in Linear.
+- **JIRA** — Epic link / parent field, or documented issue-link type.
+- **Confluence / Notion** — no native issue hierarchy; the documented `## Tickets` / `## Generated Work` section IS the source of truth.
+- **Cross-vendor** (e.g. Notion PRD → JIRA tracker) — always documented section in the PRD source.
+
+The documented `## Tickets` section is ALWAYS written (additive to native links) so the generated set is readable without parsing comments.
+
+## Rollup transition
+
+PRD rolls from `ticketed` to `shipped` when every required generated top-level child is terminal. The PRD remains open for `/lisa:verify-prd` after `shipped` — verified PASS performs native closure (archive/close/transition), verified FAIL re-opens to `ticketed` with build-ready fix tickets (never `blocked`).
+
+## Idempotency dedupe key
+
+Re-runs of intake/backlink must dedupe by child-ref identity (e.g. `owner/repo#number` for GitHub, Linear issue UUID, JIRA key) — never by URL string, which varies by formatting.
+
+---
+
 This is the single vendor-neutral source of truth for how a PRD owns the work it generates and how its lifecycle rolls up to `shipped` from that work. Every PRD-source and PRD-intake skill (`prd-backlink`, `prd-ticket-coverage`, `*-prd-intake`, `*-to-tracker`) cites this rule by slug rather than restating it, so PRD→child linking and PRD closure rollup behave identically across GitHub, Linear, JIRA/Atlassian, Confluence, and Notion instead of drifting per vendor.
 
 It defines four coupled things:
@@ -66,13 +102,13 @@ A generated top-level child is **terminal** (counts as done for rollup) when it 
 | Vendor | A generated top-level child is terminal when… |
 |---|---|
 | **GitHub Issues** | the issue is **closed** *and* (where the build-status label is used) carries the resolved `done` role label (`status:done` by default — env-keyed; see below). A closed-as-not-planned issue is terminal-but-dropped: it does not hold the PRD open but is excluded from "shipped" (treated like a won't-do leaf). |
-| **Linear** | the Issue/Project is in a **completed** workflow state (`done`-category), **or** a **canceled** state (terminal-but-dropped, like not-planned — does not hold the PRD open, excluded from shipped). |
+| **Linear** | the Issue/Project is in a **completed** workflow state (`done`-category), **or** a **canceled** or **duplicate** state (both terminal-but-dropped, like not-planned — do not hold the PRD open, excluded from shipped). Linear exposes `duplicate` as its own first-class `state.type`, distinct from `canceled`; an Issue marked as a duplicate (via Linear's native action or a team's Duplicate workflow state) is terminal and must be treated like canceled, never as still-open. |
 | **JIRA** | the issue's status is in the **Done status category** (`statusCategory.key == "done"`). |
 | **Confluence / Notion** | the documented generated-work entry is marked **done** in the PRD's machine-readable section (the durable equivalent of a closed ticket, since these sources have no native ticket state). |
 
 Notes:
 
-- **Required vs. optional children.** Only the generated top-level children that must ship for the PRD to be complete are counted toward the all-terminal check. Won't-do / canceled / not-planned children are terminal-but-dropped: they do not hold the PRD open and are excluded from the shipped set. This mirrors `leaf-only-lifecycle`'s "required leaves" qualifier.
+- **Required vs. optional children.** Only the generated top-level children that must ship for the PRD to be complete are counted toward the all-terminal check. Won't-do / canceled / duplicate / not-planned children are terminal-but-dropped: they do not hold the PRD open and are excluded from the shipped set. This mirrors `leaf-only-lifecycle`'s "required leaves" qualifier.
 - **Recursion is delegated, not duplicated.** A generated Epic is terminal only when *it* has rolled up to its own terminal state per `leaf-only-lifecycle`'s parent-status-rollup (all its required Stories/Sub-tasks terminal). This rule does not re-derive an Epic's state from its leaves — it reads the top-level child's own resolved state and trusts `leaf-only-lifecycle` to have rolled that up bottom-up.
 - **Blocked dominates at the report level.** If any required generated top-level child is blocked or incomplete, rollup leaves the PRD open and reports the incomplete child set (PRD #525: "rollup leaving a PRD open when at least one generated top-level child is incomplete"). The PRD is only advanced when **all** required top-level children are terminal.
 

@@ -1,11 +1,11 @@
 ---
 name: lisa-migrate
-description: "Migrate an existing hand-rolled wiki onto the lisa-wiki kernel — phased and compatibility-first, with a strict no-loss guarantee (renaming is fine; losing functionality or data is not). Ends by running /doctor."
+description: "Migrate an existing hand-rolled…"
 ---
 ## Lisa Command Compatibility
 
 - Original Claude command: `/lisa:migrate`
-- OpenCode invocation: `$lisa-migrate` or a plain-English request that matches this skill.
+- Codex invocation: `$lisa-migrate` or a plain-English request that matches this skill.
 - Treat the user's surrounding request as the command arguments.
 - Claude argument hint: `[--phase <0|1|1b|2|3|4|5>]`
 

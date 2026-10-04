@@ -1,14 +1,6 @@
 ---
 name: lisa-github-to-tracker
-description: >
-  Break down a GitHub Issue PRD into Epics, Stories, and Sub-tasks in the configured destination tracker
-  (JIRA via lisa-tracker-write → lisa-jira-write-ticket, or GitHub Issues itself via lisa-tracker-write
-  → lisa-github-write-issue). Use this skill whenever the user shares a GitHub issue URL and wants it
-  converted into tickets, or asks to "break down this GitHub PRD", "create tickets from a GitHub issue",
-  or similar. This skill mirrors lisa-notion-to-tracker / lisa-confluence-to-tracker /
-  lisa-linear-to-tracker for projects whose PRDs live in GitHub Issues — the workflow, gates, dry-run
-  mode, and validation rules are identical; only the source-of-truth tool surface differs (the `gh` CLI
-  instead of Notion / Confluence / Linear MCP).
+description: "Break down a GitHub Issue PRD…"
 allowed-tools: ["Skill", "Bash", "Read"]
 ---
 
@@ -36,21 +28,29 @@ This skill supports two modes, controlled by a `dry_run` flag in `$ARGUMENTS`:
 - **`dry_run: false`** (default — full mode): run all phases, write tickets via `lisa-tracker-write`, run the preservation gate, report.
 - **`dry_run: true`** (planning + validation only — no writes): run Phases 1, 1.5, 1.6, 2, 3, 4 to plan the hierarchy and draft each ticket spec, then call `lisa-tracker-validate` (with `--spec-only`) on every drafted ticket. Aggregate the per-ticket validator reports into a single dry-run report. **Skip Phase 5 (sub-task creation), Phase 5.5 (preservation gate), and Phase 6 (results report)** — none of those make sense without writes. Return the dry-run report so the caller (e.g. `lisa-github-prd-intake`) can decide whether to proceed.
 
-Dry-run output format is identical to `lisa-notion-to-tracker` / `lisa-confluence-to-tracker` / `lisa-linear-to-tracker`. Reuse the same fields, including `prd_anchor` and `prd_section`. For GitHub, `prd_anchor` is a section heading from the PRD body when the failure traces to a specific section; otherwise `null` (the caller posts unanchored failures as a rollup comment on the PRD issue).
+Dry-run output format is identical to `lisa-notion-to-tracker` / `lisa-confluence-to-tracker` / `lisa-linear-to-tracker`. Reuse the same fields, including `prd_anchor` and `prd_section`, the `### Requirement register` section, and the per-node `requirements:` lists. For GitHub, `prd_anchor` is a section heading from the PRD body when the failure traces to a specific section; otherwise `null` (the caller posts unanchored failures as a rollup comment on the PRD issue).
 
 ```text
 ## github-to-tracker dry-run: <PRD title>
+
+### Requirement register
+- R1 §"<section heading>": "<verbatim requirement text>"
+- R2 §"<section heading>": "<verbatim requirement text>"
+- ...
 
 ### Planned hierarchy
 - Epic: <summary>
   prd_section: "<heading text from the PRD body or sub-issue title that produced this epic>"
   prd_anchor: "<heading text or sub-issue ref or null>"
+  requirements: [R1, R2]   # register ids this ticket exists to satisfy; [] only for derived work
   - Story 1.1: <summary>
     prd_section: "<heading or user-story line>"
     prd_anchor: "<heading or sub-issue ref or null>"
+    requirements: [R1]
     - Sub-task [<repo>]: <summary>
       prd_section: "<heading or AC bullet>"
       prd_anchor: "<heading or sub-issue ref or null>"
+      requirements: [R1]
     - ...
   - Story 1.2: ...
 
@@ -73,7 +73,7 @@ The dry-run mode never writes to the destination tracker. It also never modifies
 
 ## Hard Rule: All Writes Go Through `lisa-tracker-write`
 
-**Every ticket created by this skill — every Epic, Story, and Sub-task — MUST be created by invoking the `lisa-tracker-write` shim. Never call `lisa-jira-write-ticket`, `lisa-github-write-issue`, `mcp__atlassian__createJiraIssue`, or `gh issue create` directly from this skill or from any sub-agent it spawns.**
+**Every ticket created by this skill — every Epic, Story, and Sub-task — MUST be created by invoking the `lisa-tracker-write` shim. Never call `lisa-jira-write-ticket`, `lisa-github-write-issue`, any vendor MCP tool, or `gh issue create` directly from this skill or from any sub-agent it spawns.**
 
 `lisa-tracker-write` enforces:
 - Vendor-agnostic dispatch (so a project's destination is one config edit away).
@@ -84,6 +84,38 @@ The dry-run mode never writes to the destination tracker. It also never modifies
 Bypassing the shim layer produces tickets that the rest of the lifecycle (triage, verify, journey, evidence) treats as broken.
 
 The `gh` reads in this skill are limited to reading the source PRD issue, its sub-issues, and its comments. They never write.
+
+## Source Requirement Section (shared format)
+
+Every ticket created by this skill — Epic, Story, and Sub-task alike —
+carries a `## Source Requirement` section in its body so anyone can
+answer "why was this done?" without leaving the ticket:
+
+```markdown
+## Source Requirement
+
+- **PRD**: [<PRD title>](<PRD URL>) §"<section heading>"
+- **Requirement (R3)**: "<verbatim requirement text from the PRD>"
+
+This ticket exists to satisfy the quoted requirement. If implementation
+scope drifts from the quoted text, the PRD is the authority — raise the
+conflict rather than silently reinterpreting it.
+```
+
+Rules:
+
+- **Verbatim quotes, never paraphrases.** The quote is what survives later
+  PRD edits, and it must be readable by a non-technical operator.
+- **Multiple requirements** → one `**Requirement (Rn)**` line each.
+- **Derived / cross-cutting work** (no single requirement) uses the
+  supporting form instead:
+  `- **Requirement**: Derived work supporting R3, R7 — no single PRD section.`
+- **All the way down**: sub-tasks carry full quotes, not just a pointer at
+  the parent Story, so a leaf claimed by build-intake in isolation is
+  self-explanatory.
+- JIRA descriptions render the section as `h2. Source Requirement`;
+  GitHub/Linear use the markdown heading. `lisa-tracker-write` and the
+  validators treat the section as mandatory for PRD-sourced tickets.
 
 ## Input
 
@@ -141,6 +173,60 @@ If env vars are not available, ask the user to provide them explicitly before pr
    - Engineering comments (prefixed with "Engineering:" or 🔧) that identify technical constraints.
    - Cross-PRD dependencies (references to other GitHub issues, Notion / Confluence / Linear PRDs, shared infrastructure).
 
+### Phase 1.4: Requirement Register (traceability)
+
+Every ticket this skill creates must be able to answer "why was this done?"
+by pointing at the PRD requirement it satisfies. Build that mapping now,
+while parsing the PRD — it cannot be reliably reconstructed afterwards.
+
+1. **Atomize the PRD into requirements** in document order: goals, user
+   stories, functional and non-functional requirements, acceptance-criteria
+   bullets, and important notes — across the PRD issue body AND every
+   sub-issue body. Use the same atomization `lisa-prd-ticket-coverage`
+   uses so the two views line up.
+2. **Assign sequential register ids** (`R1`, `R2`, …). Ids are
+   per-generation, not durable — the **verbatim quote is the durable
+   anchor**; if the PRD is edited and re-planned, ids may shift but quotes
+   still identify the requirement.
+3. **Record each entry** as `{ id, verbatim_text, section_heading }`,
+   where `section_heading` is the markdown heading (or sub-issue ref)
+   the requirement lives under — the same value used for `prd_anchor`.
+4. **Tag every planned ticket** — Epic, Story, AND Sub-task — with the
+   register ids it exists to satisfy. All the way down: sub-tasks carry
+   their own requirement quotes so a leaf dispatched in isolation is
+   self-explanatory. A ticket that genuinely traces to no single
+   requirement (cross-cutting infrastructure, derived enablement work)
+   gets `requirements: []` and must say which requirements it *supports*
+   in its Source Requirement section instead.
+
+The register feeds three consumers: the `## Source Requirement` section on
+every created ticket (Phases 3–5), the dry-run report (above), and the
+requirement tokens in the PRD back-link (Phase 7).
+
+### Phase 1.45: Requirement Quality Gates (prd-definition-of-ready)
+
+Validate every Phase 1.4 register entry against the `prd-definition-of-ready` rule before
+planning proceeds. Per atom:
+
+- **Singular** — one behavior per entry. An entry welding multiple shall/when clauses together is
+  split in the register (R4 → R4a/R4b) when the split is mechanical and meaning-preserving; when
+  the split would change meaning, it is a product question, not a repair.
+- **Unambiguous** — FAIL on the vagueness lexicon ("as appropriate", "user-friendly", "fast",
+  "handle gracefully", "etc.", "and/or", unbounded "optimize"/"support"): phrasing no test can
+  check. The full lexicon lives in the rule's reference body.
+- **Verifiable** — a fit criterion (the measurable test of satisfaction) is present or
+  mechanically derivable from the text; a requirement no test could check is not admitted as a
+  requirement.
+- **Pattern shape (SHOULD)** — an EARS pattern (ubiquitous / When / While / If-then / Where) or an
+  equivalent single-behavior sentence; conforming shapes decompose into Gherkin mechanically.
+
+Failures here are **requirement-level product clarifications**, not internal errors: report each in
+the dry-run report as a `product-clarity` item quoting the atom verbatim, naming the defect, and
+offering 1–3 candidate rewrites (an EARS-shaped rewrite is the default recommendation). In intake
+flows these route to the PRD's `blocked` role with comments, exactly like ticket-validator
+failures. Mechanical splits and derived fit criteria are repaired in-register and recorded in the
+report — never silently.
+
 ### Phase 1.5: Extract Source Artifacts
 
 PRDs typically reference external design, UX, and data artifacts (Figma files, Lovable prototypes, Loom walkthroughs, screenshots, example payloads, peer Notion / Confluence / Linear pages). These MUST be preserved onto the resulting tickets — otherwise developers picking up a ticket lose the source of truth. This is the failure mode this step exists to prevent.
@@ -175,7 +261,14 @@ Identical to `lisa-notion-to-tracker` Phase 2 / `lisa-confluence-to-tracker` / `
 
 **2b. Live product walkthrough.** If the PRD touches existing user-facing surfaces, invoke `lisa-product-walkthrough` against `E2E_BASE_URL` using the test user from config.
 
-Skip 2b only when the work is purely backend with no user-visible surface, or affects a screen that does not yet exist.
+Skip the *walkthrough* only when the work has no user-visible surface, or affects a screen that does not yet exist in dev/prod — and when you skip it, run 2c instead. Skipping 2b never means authoring the ticket with no live-state grounding.
+
+**2c. Deployed-state readback — required whenever 2b does not apply.** Per the `blocker-containment`-style shared-slug precedent, cite the `deployed-state-readback` rule for the full contract; do not restate its routing table here.
+
+2b is waived for work with no user-visible surface. That waiver is about the **observation method**, not about whether to observe: backend, infrastructure, CI-config and dependency work all have live state, it is simply not visible through a browser. So the skip selects a **different probe**, never no probe — describe the deployed resource, call the deployed endpoint, read the configuration the last pipeline run used, read the *installed* artifact. For each thing the candidate tickets would create or change, confirm it is genuinely **absent from the deployed environment** before authoring a ticket for it, and record what was probed and what came back.
+
+**Git ancestry, a merge check and `cdk synth` are never deployment evidence** — a discarded pipeline execution leaves a commit merged and unshipped, and all three still report "present". **An unanswerable probe is not a "no"**: when the state cannot be read back, record that the check could not be performed rather than defaulting to absent.
+
 
 Walkthrough findings are surfaced back to product via the orchestrating intake skill (`lisa-github-prd-intake`), which posts them as a comment on the PRD issue. This skill itself does NOT post to GitHub — it only reads. The walkthrough section is also inherited onto the resulting Epic / Stories under a `## Current Product` subsection.
 
@@ -186,8 +279,10 @@ Walkthrough findings are surfaced back to product via the orchestrating intake s
 For each epic identified in Phase 1, **invoke the `lisa-tracker-write` shim** (do not call `lisa-jira-write-ticket` or `lisa-github-write-issue` directly). Pass it everything it needs to enforce its quality gates:
 
 - `issue_type`: `Epic`
+- `prd_source`: the originating PRD URL — mandatory for every ticket this skill creates; it arms the validator's S16 traceability gate
 - `summary`: epic title from the PRD
 - `body`: a draft of the multi-section description containing:
+  - A **Source Requirement** section (see the shared format above) citing the GitHub Issue PRD URL, section heading, and the verbatim text of every register requirement (`R-id`) this epic exists to satisfy
   - **Context / Business Value**: epic summary from the PRD, originating GitHub PRD URL, business outcome
   - **Technical Approach**: cross-cutting integration points and constraints surfaced in Phase 2 codebase research
   - List of user stories the epic contains
@@ -217,9 +312,10 @@ For each Epic, plan two kinds of Stories:
 For each Story, **invoke `lisa-tracker-write`** with:
 
 - `issue_type`: `Story`
+- `prd_source`: the originating PRD URL — mandatory for every ticket this skill creates; it arms the validator's S16 traceability gate
 - `parent_ref` / `epic_parent`: the Epic ref captured in Phase 3 (mandatory)
 - `summary`: prefixed per the naming convention above
-- `body`: multi-section description as in `lisa-notion-to-tracker` Phase 4
+- `body`: multi-section description as in `lisa-notion-to-tracker` Phase 4, including as its first element a **Source Requirement** section (shared format above) quoting the register requirement(s) this story satisfies
 - `artifacts`: the Phase 1.5 artifacts filtered by domain per the inheritance table:
 
 | Story type | Inherits domains |
@@ -244,8 +340,9 @@ Delegate sub-task creation to **parallel agents** (one per epic or batch of stor
 Each sub-task MUST:
 1. **Be scoped to exactly ONE repo** — indicated in brackets in the summary: `[repo-name]` and in the body/description's `## Repository` / `h2. Repository` section.
 2. **Include an Empirical Verification Plan** — real user-like verification, NOT unit tests, linting, or typechecking.
+3. **Carry its own `## Source Requirement` section** (shared format above) with the full verbatim quote(s) from the Phase 1.4 register — a leaf claimed by build-intake in isolation must be self-explanatory. When a sub-task is split per-repo, every split child inherits the same requirement quote(s).
 
-**Leaf-only build-ready (`leaf-only-lifecycle`)**: Sub-tasks are the **leaf work units** of the decomposition — they are the ONLY items in the hierarchy that receive the build-ready label. `lisa-tracker-write` applies `status:ready` here so downstream build intake (`lisa-github-build-intake`) claims the leaves and never the Epic or Stories. Apply `status:ready` to each Sub-task; never to its parent Story or Epic (Phases 3–4). `lisa-github-write-issue` enforces the same invariant on the write side, so a Sub-task split into per-repo children (the cross-repo case above) carries build-ready on the children, not on any intermediate parent that gains child work.
+**Leaf-only build-ready (`leaf-only-lifecycle`)**: Sub-tasks are the **leaf work units** of the decomposition — they are the ONLY items in the hierarchy that receive the build-ready label. `lisa-tracker-write` applies `status:ready` here so downstream build intake (`lisa-github-build-intake`) claims the leaves and never the Epic or Stories. **Pass `build_ready: true` explicitly on every Sub-task create** — per the `ready-role-filing` rule an omitted `build_ready` is NOT build-ready on any tracker, so a decomposition that relies on a vendor default silently produces a queue nothing ever claims. Apply `status:ready` to each Sub-task; never to its parent Story or Epic (Phases 3–4). `lisa-github-write-issue` enforces the same invariant on the write side, so a Sub-task split into per-repo children (the cross-repo case above) carries build-ready on the children, not on any intermediate parent that gains child work.
 
 Sub-tasks inherit their parent Story's artifacts by reference (the parent link). Do not pass the same artifact list to every sub-task.
 
@@ -268,6 +365,7 @@ After all tickets are created, present a summary table to the user:
 - All Epics with refs and URLs
 - All Stories grouped by Epic
 - All Sub-tasks grouped by Story with repo tags
+- **Requirement coverage** — one row per Phase 1.4 register entry (`R-id`, quote excerpt, tickets that declare it); requirements with zero tickets are a gap to resolve before reporting success
 - Repo distribution
 - **Artifact Preservation Matrix**
 - Blockers list with recommendations and alternatives
@@ -283,7 +381,8 @@ Invoke `lisa-prd-backlink` with:
 
 - `source_type: "github"`
 - `source_ref`: the original GitHub Issue URL or `<org>/<repo>#<n>` token
-- `tickets`: the full list created in Phases 3–5, each entry as `{ key, title, type, url, parent_key }`
+- `tickets`: the full list created in Phases 3–5, each entry as `{ key, title, type, url, parent_key, requirements }` — `requirements` is the list of Phase 1.4 register ids the ticket satisfies (empty for derived work)
+- `requirement_register`: the Phase 1.4 register (`{ id, verbatim_text, section_heading }` entries), so the back-link section can render the requirement → tickets view
 
 If `lisa-prd-backlink` fails (permission denied, GitHub unreachable, issue locked), surface the error in the Phase 6 report rather than aborting — the tickets are already created. Recommend the user re-run `lisa-prd-backlink` standalone once the source is reachable.
 
@@ -312,9 +411,11 @@ that downstream skills (triage, journey, evidence) cannot use.
 
 For each sub-task, invoke `lisa-tracker-write` with:
 - issue_type: "Sub-task"
+- build_ready: true  # explicit per `ready-role-filing`; omitted is NOT build-ready on any tracker
+- prd_source: [the originating PRD URL — mandatory; arms the S16 traceability gate]
 - parent_ref: the parent story ref
 - summary: prefixed with the repo in brackets, e.g. "[backend-api] Add audit log table"
-- body: a multi-section draft (Context / Technical Approach / Acceptance Criteria / etc.) plus `## Repository` / `h2. Repository` naming exactly one repo
+- body: a multi-section draft (Context / Technical Approach / Acceptance Criteria / etc.) plus `## Repository` / `h2. Repository` naming exactly one repo, plus `## Source Requirement` quoting the PRD requirement(s) this sub-task satisfies VERBATIM with the PRD link and register id(s) — [paste the exact requirement text and R-ids for each sub-task from the requirement register; do not let the agent paraphrase]
 - gherkin_acceptance_criteria: derived from the story's functional requirements
 - sign_in_account: [test user credentials from config]
 - target_environment: "dev"

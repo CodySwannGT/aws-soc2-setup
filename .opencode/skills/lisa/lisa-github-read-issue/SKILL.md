@@ -1,6 +1,6 @@
 ---
 name: lisa-github-read-issue
-description: "Fetches the full scope of a GitHub Issue — metadata, body sections, all comments, native sub-issue parent and children, linked PRs, related issues parsed from `Blocks/Blocked by/Relates to/Duplicates/Cloned from` lines, and any cross-repo references. Produces a consolidated context bundle that downstream agents consume so they never act on an issue in isolation. The GitHub counterpart of lisa-jira-read-ticket."
+description: "Fetches the full scope of a…"
 allowed-tools: ["Bash", "Skill"]
 ---
 
@@ -48,6 +48,7 @@ Walk the markdown body and capture each top-level `## ` section by name. Standar
 - `Acceptance Criteria` (preserve the Gherkin code-fence verbatim)
 - `Out of Scope`
 - `Target Backend Environment`
+- `Branch Plan` (derived output per `derived-branch-plan` — parsed so callers can *compare* it against a recomputation, never so they can use it as the base branch)
 - `Sign-in Required`
 - `Repository`
 - `Source Artifacts`
@@ -62,13 +63,13 @@ Any other `##` section: capture under `extra_sections` so callers can see PRDs t
 
 ### Comments
 
-Fetch ALL comments. Do not truncate. The `comments` field from `gh issue view --json comments` includes author, body, createdAt for each. Flag comments that contain:
+Fetch ALL comments, always through the paginated endpoint, flattened into one array: `gh api repos/<org>/<repo>/issues/<number>/comments --paginate --slurp | jq 'add // []'` (author, body, created_at for each). `--paginate` alone emits one JSON array per page, so reading or counting its raw output undercounts; `--slurp` plus `jq 'add'` flattens the pages first. The `comments` field of `gh issue view --json` is not the source of record — it can be capped. Do not truncate. The fetched count is the number of comments after flattening (`... | jq 'add // [] | length'`); compare it with the issue's `comments` total (`gh api repos/<org>/<repo>/issues/<number> --jq .comments`); if they differ or a page fails, set `comments_complete: false` and say so at the top of the Comments section. Flag comments that contain:
 - Credentials, reproduction steps
 - Status updates from stakeholders
 - Decisions
 - Triage headers like `[<repo>]`
 
-If pagination matters (issues with hundreds of comments), use `gh api repos/<org>/<repo>/issues/<number>/comments --paginate` to get the full set.
+Pagination is unconditional — never skip `--paginate` because an issue looks short.
 
 ## Phase 3 — Fetch Sub-issue Graph (Parent + Children)
 
@@ -139,15 +140,64 @@ If the primary issue has a parent sub-issue (i.e., is a Story / Task / Sub-task 
 
 If the primary issue IS an Epic, capture all children via Phase 3's `subIssues` traversal (already done).
 
-## Phase 6 — Fetch Linked PRs (Native `Resolves` / Cross-references)
+## Phase 6 — Fetch Linked PRs and Label-Event History
 
-GitHub's native `closingIssuesReferences` and timeline give the canonical PR↔Issue relationship:
+GitHub's native `closingIssuesReferences` and timeline give the canonical PR↔Issue relationship. The same timeline read also exposes label events, which are Lisa's GitHub-native transition history. Keep this as one GraphQL read path; do not add a second REST timeline fetch.
 
 ```bash
-gh api graphql -f query='query($org:String!,$repo:String!,$number:Int!){repository(owner:$org,name:$repo){issue(number:$number){closedByPullRequestsReferences(first:50){nodes{number title state merged mergedAt url repository{nameWithOwner}}}timelineItems(first:100,itemTypes:[CROSS_REFERENCED_EVENT]){nodes{...on CrossReferencedEvent{source{...on PullRequest{number title state url repository{nameWithOwner}}}}}}}}}' -F org=<org> -F repo=<repo> -F number=<number>
+query='query($org:String!,$repo:String!,$number:Int!,$cursor:String){
+  repository(owner:$org,name:$repo){
+    issue(number:$number){
+      closedByPullRequestsReferences(first:50){
+        nodes{number title state merged mergedAt url repository{nameWithOwner}}
+      }
+      timelineItems(
+        first:100
+        after:$cursor
+        itemTypes:[CROSS_REFERENCED_EVENT,LABELED_EVENT,UNLABELED_EVENT]
+      ){
+        pageInfo{hasNextPage endCursor}
+        nodes{
+          ...on CrossReferencedEvent{
+            createdAt
+            actor{login}
+            source{...on PullRequest{number title state url repository{nameWithOwner}}}
+          }
+          ...on LabeledEvent{
+            createdAt
+            actor{login}
+            label{name}
+          }
+          ...on UnlabeledEvent{
+            createdAt
+            actor{login}
+            label{name}
+          }
+        }
+      }
+    }
+  }
+}'
+
+cursor=null
+while :; do
+  if [ "$cursor" = null ]; then
+    page=$(gh api graphql -f query="$query" -F org=<org> -F repo=<repo> -F number=<number>)
+  else
+    page=$(gh api graphql -f query="$query" -F org=<org> -F repo=<repo> -F number=<number> -f cursor="$cursor")
+  fi
+  printf '%s\n' "$page"
+  has_next=$(printf '%s\n' "$page" | jq -r '.data.repository.issue.timelineItems.pageInfo.hasNextPage')
+  cursor=$(printf '%s\n' "$page" | jq -r '.data.repository.issue.timelineItems.pageInfo.endCursor')
+  [ "$has_next" = true ] || break
+done
 ```
 
-Capture: PR number, title, state, mergedAt, repo, url. Dedupe with PRs found in Phase 4.
+Capture:
+- **Linked PRs**: PR number, title, state, mergedAt, repo, url. Dedupe with PRs found in Phase 4. Preserve the existing `CrossReferencedEvent` behavior for PR linkage; widening the query must not change that consumer shape.
+- **Label-event history**: chronological `LabeledEvent` and `UnlabeledEvent` entries with event kind, label name, actor login, and `createdAt`. Preserve oldest→newest order across all pages. Status labels (`status:*`) are the GitHub transition history that downstream rejection detection consumes, but keep non-status label events too so callers can audit the full label stream.
+
+Pagination is mandatory. `timelineItems(first:100)` silently truncates busy issues unless `pageInfo.hasNextPage` / `endCursor` is followed. If a page fetch fails, record label-event history as `unknown` with the error and continue assembling the bundle; a history read failure must never block the build.
 
 For each PR, fetch unresolved review comments via `gh pr view <num> --repo <org>/<repo> --json reviews,reviewThreads`.
 
@@ -194,7 +244,8 @@ Produce a single structured output that the caller can pass verbatim to downstre
 #### Source Artifacts / Source Precedence / Links / Relationship Search / Repository / Sign-in Required / Target Backend Environment / Open Questions / Current Product
 <each verbatim, omit those not present>
 
-### Comments (<count>)
+### Comments (<fetched> of <total>; comments_complete: <true|false>)
+<when incomplete: "INCOMPLETE — <fetched> of <total> comments read via <substrate>">
 <chronological comments with author + ISO timestamp + body. Flagged items called out.>
 
 ## Sub-issue graph
@@ -226,6 +277,12 @@ Produce a single structured output that the caller can pass verbatim to downstre
 
 ### Body-referenced (`Resolves #<n>`)
 <per-PR block>
+
+## Label-Event History
+- Status: <known|unknown>
+- Events:
+  - <ISO> — <labeled|unlabeled> — <label-name> — <actor-login>
+  - ...
 
 ## Sibling Sub-issues (other children of the same parent, <count>)
 - <ref> — <type> — <status> — <assignee> — <title>  **[FLAG: in progress by other assignee]**

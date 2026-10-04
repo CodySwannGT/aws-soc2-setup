@@ -20,6 +20,14 @@ Never assume something works because the code "looks correct." Run a command, ob
 
 **If all you did was run tests, typecheck, and lint — you have NOT verified.** You have only confirmed quality checks pass. Verification requires running the actual system and observing the results: making HTTP requests, clicking through the UI, executing CLI commands, querying the database, or otherwise interacting with the running software as an end user would.
 
+### Browser-controller neutrality
+
+For UI work, the agent must control a live browser and use the product the way a human would: navigate, click, type, submit, and observe the rendered result. **The browser controller is an implementation detail.** An in-app Browser/Chrome tool, interactive Playwright control (MCP, API, or an ad hoc script), CDP, computer use, the optional Lisa-owned Kane CLI adapter, or an equivalent controller is valid when it drives a real browser session and captures the declared runtime artifacts. Do not block solely because a preferred browser backend is unavailable while another capable interactive controller is available.
+
+Kane is a guarded provider, not a global browser override. It is eligible only when the project explicitly enables it, acknowledges TestMu cloud upload, pins Lisa's contract-tested version, selects an allow-listed non-production environment, and resolves mutation policy `full`; `lisa kane probe` must prove installation, authentication, Test Manager targeting, and usable credits before a factory starts. Invoke it only through `lisa-kane-browser`. Treat auth, Chrome, upload, schema, and control-plane failures as tooling failures. Persist the local evidence pack through Lisa's evidence pipeline because a Test Manager share link is secondary and expiring.
+
+Running an automated Playwright or Maestro test is still a quality gate, **not the initial empirical verification evidence**. The distinction is how the browser is used, not the library name: interactive Playwright control or a guarded Kane objective that performs and observes the Validation Journey is valid empirical verification; invoking a prewritten test and reporting its green result alone is not. After the live journey passes, codify that observed behavior in the project's configured runner(s) for the platforms it covers, as required below, so CI can prevent regressions. Kane `_test.md`, code export, and auto-healed recordings are not authoritative substitutes during the initial rollout.
+
 Verification is mandatory. Never skip it, defer it, or claim it was unnecessary. Every task must be verified before claiming completion.
 
 Before starting implementation, state your verification plan — how you will use the resulting software to prove it works. A verification plan that only lists test/typecheck/lint commands is not a verification plan. Do not begin implementation until the plan is confirmed.
@@ -100,12 +108,92 @@ Every change requires one or more verification types. Classify the change first,
 
 Every **leaf work unit** — an individually implementable ticket with no child tickets (issue types Bug, Task, Sub-task, Improvement) — that changes runtime behavior must declare, at creation time, the exact evidence that proves it is done. Epics, Stories, and Spikes are coordination containers, not work units: their evidence is the rollup of their children, so this contract does not apply to them.
 
-The declaration is not a separate field — it is the set of `[EVIDENCE: name]` markers in the work unit's **Validation Journey**. Those markers are the work unit's **evidence manifest**: an enumerated, named list of the artifacts a verifier must capture. The manifest binds both ends of the ticket lifecycle:
+The declaration is not a separate field — it is the set of `[EVIDENCE: <artifact-type>: <name>]` markers in the work unit's **Validation Journey**. Those markers are the work unit's **evidence manifest**: an enumerated, typed list of the artifacts a verifier must capture. The manifest binds both ends of the ticket lifecycle:
 
-- **At creation** — the work unit cannot be written without a Validation Journey that names at least one `[EVIDENCE: name]` artifact (enforced by gate S14 in `tracker-validate` and the vendor `*-validate-*` skills). A behavior-changing unit should name both a success artifact and an error/edge artifact.
-- **At completion** — the work unit cannot be marked complete, nor transitioned to its review/Done state, until every `[EVIDENCE: name]` marker in its manifest has a captured, non-empty artifact attached to the ticket (enforced by the Task Completion Rules and Definition of Done in `verification-lifecycle`, and by the evidence-manifest gate in `tracker-evidence`). A manifest with a missing or empty artifact blocks completion exactly like a failed verification.
+- **At creation** — the work unit cannot be written without a Validation Journey that declares at least one typed `[EVIDENCE: <artifact-type>: <name>]` artifact (enforced by gate S14 in `tracker-validate` and the vendor `*-validate-*` skills). A behavior-changing unit should declare both a success artifact and an error/edge artifact.
+- **At completion** — the work unit cannot be marked complete, nor transitioned to its review/Done state, until every marker in its manifest has a captured, non-empty artifact **of the declared type** attached to the ticket (enforced by the Task Completion Rules and Definition of Done in `verification-lifecycle`, and by the evidence-manifest gate in `tracker-evidence`). A manifest with a missing, empty, or wrong-type artifact blocks completion exactly like a failed verification.
 
-The manifest is the single source of truth for "what evidence is required": authored once in the Validation Journey, enforced at write time, replayed during `tracker-journey`, and checked again before the ticket closes. There is no second list to keep in sync.
+### Marker grammar: the type is the evidence
+
+**A marker names an artifact, not an assertion.** `[EVIDENCE: load-failure-handled-gracefully]` is a claim — there is nothing to capture, so it degenerates into a checkbox someone ticks. Evidence is empirical: a screenshot, a curl transcript, a log snippet, a frame-timing trace. The marker therefore carries two parts:
+
+```text
+[EVIDENCE: <artifact-type>: <kebab-case-name>]
+```
+
+- `<artifact-type>` — HOW the proof is captured, from the fixed taxonomy below.
+- `<kebab-case-name>` — WHAT it proves, unique within the ticket.
+
+Example transformation (the failure mode this grammar exists to prevent):
+
+| Assertion label (invalid) | Typed artifact (valid) |
+|---|---|
+| `[EVIDENCE: pipeline-load-under-3s]` | `[EVIDENCE: perf-trace: pipeline-load-tti]` |
+| `[EVIDENCE: long-column-virtualized]` | `[EVIDENCE: perf-trace: long-column-frame-timing]` |
+| `[EVIDENCE: load-failure-handled-gracefully]` | `[EVIDENCE: screenshot: load-failure-error-state]` |
+
+### Artifact-type taxonomy (fixed set)
+
+| Type | The captured artifact is |
+|---|---|
+| `screenshot` | an image of the observed UI/state (Playwright, simulator, device) |
+| `recording` | a video of the playthrough |
+| `http-transcript` | the exact request (curl command or client call) plus the full response — status, headers of interest, body |
+| `cli-output` | the command plus its stdout/stderr and exit code |
+| `log-snippet` | correlated log lines captured from the running system |
+| `db-query-output` | the query plus the returned rows |
+| `perf-trace` | benchmark / frame-timing / profiler output, with the methodology (device profile, dataset size) noted |
+| `test-run-log` | reporter output naming the spec and showing it ran and passed |
+| `deploy-log` | deployment output or a health-check response from the target environment |
+| `state-dump` | machine-readable observed state (e.g. the `state.json` asserted against) |
+
+Do not invent types inline; if none fits, propose extending this table. The legacy `[SCREENSHOT: name]` marker is equivalent to `[EVIDENCE: screenshot: name]`.
+
+The manifest is the single source of truth for "what evidence is required": authored once in the Validation Journey, enforced at write time, replayed during `tracker-journey` (which captures each artifact **in its declared type**), and checked again before the ticket closes. There is no second list to keep in sync.
+
+### Every evidence surface names what it did NOT establish
+
+An evidence comment that lists only what passed is unreadable at a gate: a journey that skipped an edge state looks exactly like one that covered it. So every evidence comment — and the committed `evidence/<ticket>/verdict.json` — carries two extra sections, defined in full by the `claim-evidence-mapping` rule:
+
+- **Artifact identity** — what the evidence was collected against, as values rather than placeholders: the `repository`, the `head_sha` the run observed, the `environment`, and per artifact its `sha256` digest and `captured_at`. Defined in full by the `claim-evidence-mapping` rule.
+- **Not established** — a **required, never-omitted** heading listing what the verification did *not* prove: boundaries not exercised, environments not tested, behavior consciously out of scope. When nothing is outstanding it still renders, reading `None outstanding — reviewed`. It is never blank.
+
+The committed verdict carries the machine-readable half:
+
+```
+evidence/<ticket>/verdict.json
+  not_established: []            # what was NOT proved; may be empty
+  not_established_reviewed: true # attests the list was reviewed; may NEVER be omitted
+  drift: none                    # live-environment baseline-vs-now drift classification:
+                                 # none | progress | regression | unrelated_churn
+  artifact: { repository, base_sha, head_sha, build_id, environment, observed_at }
+  evidence: [ { evidence_id, kind, locator,
+                artifact_head_sha,   # the head_sha in force when THIS artifact was captured
+                sha256,              # content digest of the committed evidence file
+                captured_at } ]
+```
+
+`artifact.head_sha` pins the build the verification observed; each entry's `sha256` pins the bytes. An entry whose `artifact_head_sha` differs from `artifact.head_sha` is an `artifact_mismatch` and a recomputed digest that disagrees is an `evidence_digest_mismatch` — each fails loudly, naming both SHAs or the evidence id, and blocks completion. At completion the pinned `head_sha` is reconciled against **the merged head** using the ancestry + deploy-run definition of "what shipped" that `lisa-drive-pr-to-merge` already owns (cite it; there is no second definition): pre-merge evidence counts only when its head is a parent of the merge, and on a merge-race mismatch verification re-runs against the merged head before completion is declared.
+
+The list may be empty; the flag may not be missing. An absent `not_established_reviewed` is indistinguishable from nobody having asked the question, so the evidence-posting gate in `tracker-evidence` refuses the post, and the Stop-hook gate reports it as a v2 contract violation (advisory until `verification.gate.enforceBoundaries` is ratcheted on). This generalizes the required, never-empty `Known limits` field of `lisa-improve-harness` to every evidence surface.
+
+The boundary each artifact type reaches — and therefore which claim a captured artifact can discharge — is the `claim-evidence-mapping` rule's taxonomy; the type table above is its evidence-kind source.
+
+The verdict is read twice. The Claude-only `enforce-verification-gate.sh` Stop hook reads it to decide whether the flow may stop; `lisa-spec-conformance` (run by `spec-conformance-specialist` in the verification phase) reads it to decide whether each shipped requirement's proof actually reaches its boundary — a cited-evidence-boundary mismatch is a `BOUNDARY_MISMATCH` conformance finding there, caught alongside empirical verification rather than after it. On harnesses without a Stop hook, `lisa-implement`'s prose gate carries the same v2 expectations by convention. The whole system, operator-readable end to end, is written up as the Lisa wiki's **Bounded-Claims Evidence System** concept page (`wiki/concepts/bounded-claims-evidence-system.md` upstream).
+
+### Cross-work-item evidence references are non-claiming
+
+When prose needs to point at evidence declared by another work item, use the dedicated reference form:
+
+```text
+[EVIDENCE-REF: <work-item-ref> | <artifact-type>: <kebab-case-name>]
+```
+
+For example, `[EVIDENCE-REF: CodySwannGT/lisa#1548 | test-run-log: plugin-parity]` or `[EVIDENCE-REF: ENG-123 | screenshot: empty-state]`. The work-item reference must be a native, unambiguous tracker reference; the artifact type and name use the same taxonomy and kebab-case grammar as a manifest marker.
+
+For compatibility with Lisa 2.223.0, validators and consumers also accept the legacy form `[EVIDENCE-REF: <tracker-ref>: <artifact-type>: <kebab-case-name>]` as a non-claiming pointer. Parse that legacy payload from the right: the final two colon-delimited fields are the fixed artifact type and kebab-case name, and everything before them is the non-empty tracker reference (which may itself contain `:` as part of a URL). Writers must never emit the legacy form; normalize it to the pipe form whenever editing the journey.
+
+`EVIDENCE-REF` is a pointer only. It never adds an artifact to the current work item's manifest, never satisfies S14, never participates in marker-name uniqueness or duplicate checks, and is never captured or checked by journey, evidence-posting, or completion flows. Only the exact claiming prefix `[EVIDENCE: ...]` declares an obligation on the current work item (with the legacy `[SCREENSHOT: name]` form still treated as a local screenshot obligation). A runtime-changing leaf whose journey contains references but no local claiming marker still fails S14. Writers must use `EVIDENCE-REF` rather than quoting a sibling's `[EVIDENCE: ...]` marker, because quoted or code-formatted claiming markers still belong to the current work item.
 
 ---
 
@@ -118,6 +206,8 @@ Verification happens at two stages in the workflow:
 - **Remote verification** (part of the Verify flow): After the PR is merged and deployed, repeat the same empirical verification against the target environment. This proves the change works in production, not just locally. If remote verification fails, fix and re-deploy.
 
 Both levels use the same verification types table above. The difference is the environment, not the rigor.
+
+Remote verification must be **drift-aware**: the target environment may legitimately change between the local baseline and the remote run (its own deploy, out-of-band infra changes, data churn). Assert invariants — shape, exact paths, forbidden values, internal coherence — rather than equality with the local evidence snapshot; when observed state differs from the baseline, classify the drift and record it in the verdict's canonical `drift` field (`none | progress | regression | unrelated_churn`, defined in the `verdict.json` contract above). Only a broken invariant is a failure; never encode "the environment held still" as an implicit assumption.
 
 ---
 
@@ -141,13 +231,16 @@ Verification **is** UAT — one gate, not two. This section makes the single
 verification process concrete so "an agent actually exercised the running
 software against the acceptance criteria" is durable and re-checkable, not a
 one-off claim. It builds on the **Per-Work-Unit Evidence Contract** above (the
-`[EVIDENCE: name]` manifest), adding three concrete requirements:
+typed `[EVIDENCE: <artifact-type>: <name>]` manifest), adding three concrete requirements:
 
 **1. The codified proof re-runs in CI.** After local verification passes,
-`codify-verification` encodes it where the project's e2e/Playwright tests live
-(`tests/e2e/**`). That suite runs in CI (the existing e2e/Playwright job); for a
-project type with verification **enforced**, it is a required check — so the proof
-re-runs on every PR instead of being proven once by hand.
+`codify-verification` encodes it wherever the project's own configured e2e runner(s) already look
+for tests — its own directory conventions and config, never a Lisa-assumed path or tool. That suite
+runs in CI (the project's existing e2e job, whatever runner backs it); for a project type with
+verification **enforced**, it is a required check — so the proof re-runs on every PR instead of being
+proven once by hand.
+
+For **frontend work**, codification is multi-runner and governed by the `bdd-e2e-coverage` rule: the same verified journey is encoded in the project's configured runner for every platform the behavior's scenario requires, and no runner substitutes for another because they guard different platforms. The requirement is non-demotable: a missing runner is either a recorded absence (the project genuinely has no such harness for that platform) or a linked build-ready follow-up ticket — never a silent skip. That rule also owns the behavior contract the codified tests are sealing (Gherkin scenarios with stable IDs, the coverage map, waivers, and the gate); cite it rather than restating it here.
 
 **2. Evidence is committed to the repo.** The named artifacts from the work
 unit's evidence manifest are committed under `evidence/<ticket>/` (in addition to

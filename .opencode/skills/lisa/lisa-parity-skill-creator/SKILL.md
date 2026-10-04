@@ -1,6 +1,6 @@
 ---
 name: lisa-parity-skill-creator
-description: "Author a new Lisa skill end-to-end — scaffold the SKILL.md frontmatter (name/description/allowed-tools), write the pass-through command, follow hyphen naming, place files under plugins/src/base, and rebuild plugins. Lisa-native reimplementation of the upstream skill-creator plugin. NO drift pin: upstream publishes no semver, so it is not drift-trackable."
+description: "Author a new Lisa skill…"
 allowed-tools: ["Read", "Edit", "Write", "Bash"]
 ---
 
@@ -32,7 +32,9 @@ reimplement a semver-versioned upstream plugin.
 
 If the knowledge is narrow or one-off, prefer a rule in `.claude/rules/` instead
 — skills are for broad, repeatable capabilities. When unsure whether content
-warrants a skill, run it past the `skill-evaluator` agent first.
+warrants a skill, run it past the `skill-evaluator` agent first — it is the
+six-rung ladder router, a skill is only one rung, and it may recommend a
+cheaper or stronger destination instead.
 
 ## Where skills live
 
@@ -58,9 +60,11 @@ first:
   `name`: `lisa-implement`, `lisa-git-commit`, `lisa-tracker-write`. No spaces,
   no camelCase, no underscores.
 - The directory name and the frontmatter `name` must match exactly.
-- Commands live under `commands/lisa/` and map to colon-separated slash names:
-  `commands/lisa/git/commit.md` → `/lisa:git:commit`;
-  `commands/lisa/implement.md` → `/lisa:implement`.
+- Commands live flat under `commands/` — Claude Code prefixes plugin commands
+  with the plugin name, so `commands/git/commit.md` → `/lisa:git:commit` and
+  `commands/implement.md` → `/lisa:implement`. (Per-agent variant generators
+  nest them under `commands/lisa/` for harnesses without plugin-name
+  namespacing; never author that nesting in source.)
 - **Commands** surface as `/lisa:*` (colon). **Skills** surface as `/lisa-*`
   (hyphen). Never share a bare name like `implement` across both surfaces.
 
@@ -112,15 +116,15 @@ carries the actual logic. Keep the two descriptions consistent.
 1. **Decide placement** — downstream (`plugins/src/base`) vs. Lisa-only
    (`.claude`). For base, both a skill and a command directory entry are needed.
 2. **Pick the name** — `lisa-<slug>`, hyphenated, unique. Check it does not collide:
-   `ls plugins/src/base/skills/` and `ls plugins/src/base/commands/lisa/`.
+   `ls plugins/src/base/skills/` and `ls plugins/src/base/commands/`.
 3. **Create the skill** at
    `plugins/src/base/skills/lisa-<name>/SKILL.md` with the frontmatter above and a
    body that follows house style — see `plugins/src/base/skills/lisa-quality-review/SKILL.md`
    for the canonical shape (title, "When to use", numbered checklist/steps,
    explicit "Rules"/"Output" sections). Write real, actionable guidance, not
    TODOs.
-4. **Create the command** at `plugins/src/base/commands/lisa/<name>.md` (or a nested
-   `commands/lisa/<namespace>/<name>.md` for a colon-namespaced command) using the
+4. **Create the command** at `plugins/src/base/commands/<name>.md` (or a nested
+   `commands/<namespace>/<name>.md` for a colon-namespaced command) using the
    pass-through template.
 5. **Rebuild the artifacts** so the generated plugins match source:
    ```bash

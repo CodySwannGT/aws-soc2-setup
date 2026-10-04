@@ -1,6 +1,6 @@
 ---
 name: lisa-linear-write-prd
-description: "Creates or idempotently updates a PRD as a Linear Project carrying exactly one PRD lifecycle project-label (`prd-draft` by default, or `prd-ready` when initial_role is ready so lisa-linear-prd-intake auto-claims it). The Linear PRD-source writer behind lisa-prd-source-write. Dedupes by a stable marker embedded in the Project description (matched by marker, never by name). Uses the Linear MCP."
+description: "Creates or idempotently updates…"
 allowed-tools: ["Skill", "Bash"]
 ---
 
@@ -85,6 +85,8 @@ outcome: created | reused
 ```
 
 ## Rules
+
+- The PRD body's requirements MUST conform to `prd-definition-of-ready`: identified atoms (`R1`, `R2`, …), one behavior each in an EARS-pattern shape, each with a measurable fit criterion, plus the non-functional checklist. This governs factory-authored bodies; human-authored PRDs are validated at intake instead (`*-to-tracker` Phase 1.45).
 
 - Exactly one PRD lifecycle project-label at all times.
 - Match dedupe by marker, never by project name.

@@ -1,6 +1,6 @@
 ---
 name: lisa-wiki-connector-confluence
-description: Produce sanitized Confluence source notes for lisa-wiki ingest via the Atlassian MCP. Use only when lisa-wiki-ingest routes to the confluence connector. Read-only; tenant-guarded.
+description: "Produce sanitized Confluence…"
 ---
 
 # lisa-wiki-connector-confluence

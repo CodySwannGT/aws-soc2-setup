@@ -1,6 +1,6 @@
 ---
 name: lisa-ticket-triage
-description: "Analytical triage gate for tickets in the configured destination tracker (JIRA, GitHub Issues, or Linear). Detects requirement ambiguities, identifies edge cases from codebase analysis, and plans verification methodology. Posts findings to the ticket and produces a verdict (DUPLICATE_ALREADY_FIXED/BLOCKED/PASSED_WITH_FINDINGS/PASSED) that gates whether implementation can proceed. Vendor-neutral: the caller (jira-agent or github-agent) is responsible for fetching the ticket via lisa-tracker-read, running the pre-flight gate via lisa-tracker-verify, and posting findings via the matching vendor comment tool."
+description: "Analytical triage gate for…"
 allowed-tools: ["Read", "Glob", "Grep", "Bash"]
 ---
 
@@ -46,7 +46,7 @@ If relevant code IS found, proceed to Phase 2.
 
 From the context bundle, evaluate relationships before analyzing this ticket in isolation:
 
-- **Open blockers (`is blocked by`)**: if any blocker is not `Done` or its linked PR is not merged, raise an ambiguity: "Blocker {KEY} is not shipped — work cannot meaningfully start." This is an automatic `BLOCKED` verdict unless the human confirms the blocker state is acceptable.
+- **Open blockers (`is blocked by`)**: clear-check each blocker **by containment, per the `blocker-containment` rule** — cite that slug for the full contract rather than restating it. A blocker is satisfied when its merged PRs are ancestors of the branch this ticket will be built from (resolved from this ticket's `## Target Backend Environment` through `.lisa.config.json` `deploy.branches`, never from a rendered `Branch Plan`), or when the rule's narrow no-code carve-out or human override applies. **`Done` is not the test** — a state name holds in a single-trunk workflow and comes apart in a promotion workflow, and requiring the production terminal strands every dependent behind work already merged where this ticket needs it. This is the same predicate the `DUPLICATE_ALREADY_FIXED` bullet below already requires ("present on the relevant base branch… never from a name/label match alone"), applied here too. For a blocker that is not contained, or where containment is not computable, raise an ambiguity naming the rule's reason key: "Blocker {KEY} is not on {BRANCH} ({REASON}) — work cannot meaningfully start." That is an automatic `BLOCKED` verdict unless the human confirms the blocker state is acceptable.
 - **Epic siblings in progress**: if a sibling under the same epic is `In Progress` / `In Review` with a different assignee and overlapping scope, raise it as an edge case in Phase 4 ("Duplicate-work risk with {KEY}").
 - **`duplicates` / `is duplicated by` links**:
   - If this ticket is a duplicate of an open canonical ticket whose fix is not yet merged into the base branch, verdict is `BLOCKED` with the recommendation to close as duplicate manually rather than implement.
@@ -66,6 +66,23 @@ Parse the ticket's existing comments for triage headers from OTHER repositories.
 Note which phases other repos have already covered and what findings they posted. In subsequent phases:
 - Do NOT duplicate findings already posted by another repo
 - DO add supplementary findings specific to THIS repo's codebase
+
+## Phase 2.5 -- Rework Detection & Failure Classification
+
+Invoke `lisa-rework-triage` with the context bundle. It detects whether this ticket is
+**rework** — previously implemented work bounced back from QA/staging — and, when it is,
+classifies why the previous agent attempt failed (decomposition infidelity, PRD defect,
+missing tool access, implementation defect, environment/data, verification gap), posts the
+`[lisa-rework-triage]` comment, and routes the cause to its hardening destination (upstream
+Lisa issue, provisioning ticket, or PRD defect flag). See that skill for the taxonomy,
+evidence requirements, and routing table.
+
+- `NOT_REWORK` → proceed to Phase 3; nothing to carry forward.
+- `REWORK_CLASSIFIED` / `ALREADY_TRIAGED` → carry the classification into the output
+  structure (see below) and proceed to Phase 3 — a classified rework still gets fixed;
+  hardening runs alongside the fix, never in front of it. Exception: a `missing-tool-access`
+  cause whose gap is **still present** must be raised as a Phase 3 ambiguity ("prior attempt
+  lacked <tool>; it is still unavailable"), which blocks per the normal rules.
 
 ## Phase 3 -- Ambiguity Detection
 
@@ -139,6 +156,14 @@ Produce a table:
 
 Every verification method must be specific enough that an automated agent could execute it.
 
+### Prescribed controls must be reachable
+
+When the ticket pins an **existing** test as a red-before-green control — "that test must go red", "fails before the fix and passes after", "if it still passes the fix did nothing" — apply the `control-reachability` rule before accepting it. The stopping rule is only valid if the test's fixture exercises the path the change touches; when it does not, the test stays green for an unrelated reason and the ticket instructs the implementer to revert a correct fix.
+
+- Confirm the ticket carries the `[CONTROL: <test-identifier> | reaches: <input-or-field>]` marker gate S20 requires, and that the named input is actually present in that test's fixture. Verify it in the codebase — this is a triage step precisely because triage is the last point before an implementer starts trusting it.
+- A named control with no reachability declaration, or one whose declared input is absent from the fixture, is an **Ambiguity** finding under Phase 3, not a pass. Report it with the specific input the fixture would need, or the recommendation to specify a new test instead.
+- A ticket that introduces a **new** test rather than pinning an existing one carries no such obligation. Do not raise a finding on this basis.
+
 ## Phase 6 -- Verdict
 
 Evaluate the findings and produce exactly one verdict:
@@ -174,6 +199,9 @@ Structure all output with clear section headers so the caller can parse and post
 
 ### Verification Methodology
 [Phase 5 table, or "No acceptance criteria to verify."]
+
+### Rework Classification
+[Phase 2.5 verdict block from lisa-rework-triage, or "Not rework (first attempt)."]
 
 ## Verdict: [NOT_RELEVANT | DUPLICATE_ALREADY_FIXED | BLOCKED | PASSED_WITH_FINDINGS | PASSED]
 ```

@@ -1,4 +1,4 @@
 display_name: "Notion Access"
-short_description: "Vendor-neutral access layer for Notion"
+short_description: "Vendor-neutral access layer for…"
 default_prompt:
-  - "Use $lisa-notion-access: Vendor-neutral access layer for Notion."
+  - "Use $lisa-notion-access: Vendor-neutral access layer for…."

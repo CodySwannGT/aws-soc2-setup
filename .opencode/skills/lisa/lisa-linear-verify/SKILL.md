@@ -1,6 +1,6 @@
 ---
 name: lisa-linear-verify
-description: "Verifies a Linear work item meets organizational standards by fetching the live item and running it through lisa-linear-validate-issue. Catches anything dropped or reformatted on write — same gates as the pre-write check, but applied to what Linear actually stored. Read-only."
+description: "Verifies a Linear work item…"
 allowed-tools: ["Bash", "Skill"]
 ---
 
@@ -43,6 +43,20 @@ Pass the fetched item to `lisa-linear-validate-issue` (in identifier mode — le
 Return the validator's report verbatim — same structured format as `lisa-linear-validate-issue`. Callers (especially `lisa-linear-write-issue` Phase 7) parse the verdict to decide whether to declare success.
 
 If the verdict is `FAIL`, the caller should fix the item and re-run verify. Never declare success on a `FAIL` verdict.
+
+## Comparison semantics — semantic, never byte-exact
+
+Verification here re-runs `lisa-linear-validate-issue` against the live work item. It does **not** compare the
+stored body against the sent body byte for byte, and it must never drift to doing so.
+
+Linear normalizes markdown on write. Observed normalizations include rewriting `-` bullets
+as `*`, wrapping a bare URL as an explicit link, and re-segmenting bold emphasis around
+inline code spans — all lossless, all rendering-identical. **A byte-exact comparator cannot
+distinguish vendor markdown normalization from corruption**, so it reports failure on
+perfectly healthy writes and trains its reader to ignore it (CodySwannGT/lisa#3663).
+
+Any comparison of tracker-normalized rich text is therefore semantic, or
+normalize-then-compare. Byte-exact comparison of such text is forbidden.
 
 ## Rules
 

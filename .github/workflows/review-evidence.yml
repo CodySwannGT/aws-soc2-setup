@@ -1,0 +1,273 @@
+# Seeded by Lisa on first setup — this file is YOURS.
+# Lisa will not overwrite it. (copy-overwrite assets ARE replaced each run.)
+# -----------------------------------------------------------------------------
+# Review evidence — the VACUITY arm, wired to a pull request (#2928)
+# -----------------------------------------------------------------------------
+# `.github/required-checks.json` names, in `evidence_bearing_checks`, the checks
+# whose GREEN is supposed to mean something reviewed the code. A review bot can
+# report `success` with the description `Review rate limited` having reviewed
+# NOTHING — `gh pr checks` prints `pass` for that exactly as it does for a real
+# review, and only the description tells them apart.
+#
+# WHY THIS WORKFLOW EXISTS. The rule that detects it shipped long before
+# anything invoked it: `quality.yml` runs the guard's OFFLINE arm with no `--pr`,
+# a scheduled drift workflow ran its own arm, and the package
+# script named for the vacuous check was a bare invocation. So the detection was
+# `declared-but-uncallable` — the very family the guard exists to describe,
+# one level up inside its own shipping. Measured on the repository that owns it:
+# 23 of the last 25 merged pull requests had a REQUIRED review check that
+# reviewed nothing, and nothing anywhere said so.
+#
+# WHY IT IS ITS OWN WORKFLOW AND NOT A JOB IN `ci.yml`. Reading checks needs
+# scopes the reusable-quality caller does not grant, and a called workflow may
+# only DOWNGRADE the caller's grant — asking for more is a startup_failure for
+# the entire run (#2049). A standalone workflow declares its own permissions and
+# constrains nothing else.
+#
+# ENFORCING. `--require-review-evidence` requires the declared review check to
+# account for its verdict. A review that RAN AND OBJECTED blocks. These two
+# vendor-owned outcomes remain explicit waivers: `Review rate limited` and
+# `Review skipped: manual review required for this OSS repository`. They stay
+# loud and nonblocking because a pull request author cannot fix the entitlement.
+#
+# AND "LOUD" IS A RENDERING, NOT A LOG LINE (#3639). This job exits 0 for a
+# satisfied gate and 0 for a waived one, so on its own `gh pr checks` prints
+# `pass` for a pull request nothing read, character for character what it
+# prints for a reviewed one. Measured on the repository that ships this: 39 of
+# the last 40 merged pull requests waived, which makes the waiver the DEFAULT
+# path rather than an exception. The second step republishes the verdict as its
+# own check run whose conclusion the guard chose — `success` reviewed,
+# `neutral` WAIVED, `failure` unsatisfied. `neutral` blocks nothing and buckets
+# as `skipping`, so the waiver keeps its rationale and loses its disguise. Do
+# not "simplify" that step away, and do not turn the waiver into a failure:
+# a gate that reddens every pull request on a vendor's billing state gets
+# deleted, and then nothing is watching at all.
+#
+# AND A WAIVER MAY NOT COVER A REVIEW THAT HAPPENED (#3706). Everything above
+# classifies the review check from its `state` and its `description`, and the
+# description is NOT a function of whether a review happened. Measured on
+# CodySwannGT/lisa#3762: `success`, description `Review rate limited`, and the
+# vendor HAD reviewed — it posted `CHANGES_REQUESTED` and found a real defect.
+# The identical string appears on pull requests nothing read, so one string
+# carried two opposite facts and the waiver collapsed them PERMISSIVELY: the one
+# condition this gate exists to let through to a human was the condition it
+# merged. Re-measured on the repository that ships this, 2026-09-06, over the
+# last 40 merged pull requests: 34 reported `Review rate limited`, and 7 of those
+# 34 carried review activity at the head while the published verdict said "this
+# pull request is UNREVIEWED".
+#
+# So the waiver is now CONDITIONAL ON THE ABSENCE OF REVIEW. When a waiver is on
+# the table — and only then, so no other path pays a network call — the guard
+# reads the pull request's own review surface, `reviewDecision` and
+# `reviewThreads`, which is the only surface that answers the question and the
+# one `gh pr checks` cannot see at all. An objection there is `unsatisfied`,
+# never waived. Review activity without an objection stays WAIVED at unchanged
+# severity and merely stops asserting that nobody reviewed. A surface that
+# cannot be read stays WAIVED too, and says the waiver is uncorroborated —
+# refusing there would convert a transient API error into a red gate on a pull
+# request nobody has a finding about.
+#
+# `reviewDecision` rather than the reviews' own states, deliberately: GitHub
+# already computes the latest state per reviewer there, so a DISMISSED objection
+# is not resurrected. Recomputing it here would manufacture the false red
+# tracked on #3720 while closing the false green tracked here.
+#
+# AND A PULL REQUEST SPEAKS FOR ONE COMMIT ONLY (#3658). Everything above judges
+# this pull request's HEAD, which is the one commit a batch integration pull
+# request does not speak for: its head carries the MERGES of every constituent
+# and none of their review statuses. MEASURED 2026-09-03 on one queue drain —
+# four constituents based on a batching branch each reported `Review skipped:
+# reviews are disabled for this base branch`, each one's own run of this workflow
+# went red, and every one of those reds landed on a branch outside the rulesets'
+# ref conditions, so nothing was watching. The integration pull request that
+# carried all four into the default branch was the one place a ruleset applied,
+# and it read only itself. `--require-review-evidence` now also enumerates what
+# this pull request CARRIES — through its merge commits, never through a branch
+# NAME, because a name is an allowlist the convention can rename its way out of
+# — reads each constituent at its OWN head, and renders a batch carrying an
+# unreviewed constituent `neutral` instead of `success`. Capped at `neutral`
+# deliberately: the constituents' own runs already reached the failing verdict
+# where their diffs live, and reddening the batch too would fail an author for a
+# diff they did not write. Failing to READ the batch renders `neutral` as well —
+# an unread batch is not a reviewed one. An ordinary pull request has no merge
+# commits, enumerates an empty batch, and is untouched.
+#
+# `--waive-rate-sample=<N>` samples recently merged pull requests and reports
+# how many of them waived, in the job summary and in the verdict title. It runs
+# ONLY when this pull request is itself waived, is one GraphQL call, and is
+# best-effort: a failed sample costs one sentence, never the verdict. Omit the
+# flag to disable the sample entirely.
+#
+# A rate-limit queue may be roughly hour-long. Agentic delivery retries through
+# it, with an auditable admin-merge only at the exterior governance gate after
+# every other required check and independent review has passed.
+#
+# `--fail-on-vacuous` is a DIFFERENT switch and is not passed here. It governs
+# other vacuity findings; named review waivers remain nonblocking under it.
+# `--require-review-evidence` alone controls review-gate blocking.
+#
+# THREE STATES, NEVER TWO. `absent` is not `waived`: no review result means
+# nothing accounts for the silence and the gate must refuse it.
+#
+# It CAN still go red, for one reason that is not a finding: the arm inspected
+# NOTHING. An unresolvable pull request, a `gh` it could not read, an empty
+# check roster, or an empty `evidence_bearing_checks` all print the same
+# "nothing vacuous here" as a genuinely clean run, so the guard refuses instead
+# and names which one it hit. Read the `vacuity_*` token before reporting a red
+# run here as a hollow review: `NOBODY LOOKED` and `THE REVIEW WAS FAKE` are
+# opposite facts.
+
+name: 🕵️ Review Evidence
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'Pull request number to inspect'
+        required: true
+        type: string
+
+# `actions: read` is what `gh pr checks` needs — it resolves the rollup through
+# `checkSuite.workflowRun`, and without it `gh` exits non-zero with EMPTY
+# STDOUT, a failure shaped like a content problem that never says the word
+# "permission". `checks: read` + `statuses: read` are what the guard's
+# permission-light fallback needs; a legacy commit status like CodeRabbit's is
+# the only route that carries a description at all.
+permissions:
+  contents: read
+  actions: read
+  # `checks: write` is what publishing the verdict needs. A check run is the
+  # only artefact that can carry a `neutral` conclusion, and `neutral` is the
+  # only rendering that is neither a pass nor a failure; a commit status has no
+  # such state, so a waiver posted that way would be a `pass` again.
+  checks: write
+  statuses: read
+  pull-requests: read
+
+concurrency:
+  group: review-evidence-${{ github.event.pull_request.number || inputs.pr || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vacuity:
+    # DECLARATIVE, NOT A QUESTION (#3917). This was `🕵️ Did the required review
+    # checks do any work?`, and an unsatisfied verdict exits non-zero, so the
+    # row rendered `Did the required review checks do any work?  fail`. A yes/no
+    # question answered `fail` composes to "NO" — the row asserted that the
+    # review checks did no work at exactly the moment the verdict said
+    # `UNDETERMINED — ... is NOT reporting that nobody reviewed`. A
+    # question-shaped name cannot safely carry more than two outcomes, and the
+    # settle-timeout gives this gate a third.
+    #
+    # AND THE OBVIOUS REPLACEMENT WOULD BE A NEW FALSE CLAIM. `Required review
+    # checks did work` reads true on a failure but FALSE on a pass: this job
+    # exits 0 for a SATISFIED gate and for a WAIVED one alike, so the pass path
+    # would assert work on the very pull requests nothing reviewed. The name
+    # therefore describes the GATE and asserts nothing about the review; the
+    # three-valued answer is published next door as `🕵️ Review evidence
+    # verdict`, which is where it belongs.
+    #
+    # Only the name changed. Severity, exit codes, the wait, and the verdict
+    # vocabulary are untouched.
+    name: 🕵️ Review evidence gate
+    runs-on: ubuntu-latest
+    # The guard waits for the declared checks to settle before judging them: a
+    # review bot posts `pending — "Review queued"` and `pending — "Review in
+    # progress"` first, both of which are in the no-work vocabulary, so judging
+    # them on arrival manufactures a finding on EVERY pull request. Its default
+    # ceiling is five minutes; this leaves room for the wait plus the run.
+    timeout-minutes: 10
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          package-manager-cache: false
+          node-version: '22.23.3'
+
+      - name: 🕵️ Refuse a required check that reviewed nothing
+        id: review_evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Absent on a `pull_request` run, where the guard reads the event
+          # payload instead; set only for the manual dispatch path.
+          VACUITY_PR: ${{ inputs.pr }}
+        run: |
+          set -eu
+          # An absent input is a FAILURE, never a skip — the same flip #2933
+          # made to the `🔒 Skipped Required Checks` job in quality.yml, for the
+          # same reason: this workflow is installed by the same `lisa apply`
+          # that installs the prover and the seed, so neither can be absent
+          # without the install being broken, and a green run that inspected
+          # nothing is the exact defect being checked for.
+          if [ ! -f scripts/check-skipped-required-checks.mjs ]; then
+            echo "::error title=Vacuity prover missing::scripts/check-skipped-required-checks.mjs does not exist, so no required check was read on this pull request. Run \`lisa apply\` to install the Lisa-managed script."
+            exit 1
+          fi
+          if [ ! -f .github/required-checks.json ]; then
+            echo "::error title=Required-checks declaration missing::.github/required-checks.json does not exist, so nothing names which checks are supposed to carry review evidence. It is create-only and Lisa ships a seed — run \`lisa apply\` to get it."
+            exit 1
+          fi
+          if [ -n "${VACUITY_PR:-}" ]; then
+            node scripts/check-skipped-required-checks.mjs --vacuity --require-review-evidence --waive-rate-sample=40 --pr="$VACUITY_PR"
+          else
+            node scripts/check-skipped-required-checks.mjs --vacuity --require-review-evidence --waive-rate-sample=40
+          fi
+
+      # ---------------------------------------------------------------------
+      # The point of #3639: render the verdict where a merge decision reads it.
+      # ---------------------------------------------------------------------
+      # The job above exits 0 for a SATISFIED gate and 0 for a WAIVED one, so
+      # `gh pr checks` printed `pass` for a pull request nothing had read,
+      # character for character what it prints for a reviewed one. The waiver
+      # was honest in the run log and invisible at the only layer anybody
+      # consults before pressing merge; measured on this repository, 39 of the
+      # last 40 merged pull requests took that path, so the disguise was the
+      # DEFAULT rendering rather than an edge case.
+      #
+      # This step republishes the same verdict as its own check run, whose
+      # conclusion the guard chose: `success` reviewed, `neutral` WAIVED,
+      # `failure` unsatisfied. `gh pr checks` buckets NEUTRAL as `skipping`, so
+      # a waiver stops looking like a pass without acquiring the power to block
+      # — the waiver's rationale is untouched, because a pull request author
+      # still cannot fix a vendor's billing state.
+      #
+      # `continue-on-error` and `if: always()`: this is RENDERING, downstream of
+      # a verdict already reached and already exited on. A fork pull request
+      # gets a read-only token and cannot write a check run at all, and losing
+      # the rendering there must not invert the verdict above it.
+      - name: 🕵️ Publish the review verdict where a merge decision reads it
+        if: always() && steps.review_evidence.outputs.review_evidence_conclusion != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Empty on the `workflow_dispatch` path, where there is no
+          # `pull_request` payload to read a head SHA from. The step resolves it
+          # from the dispatched number instead, so it needs the number too.
+          VACUITY_PR: ${{ inputs.pr }}
+          VERDICT_CONCLUSION: ${{ steps.review_evidence.outputs.review_evidence_conclusion }}
+          VERDICT_TITLE: ${{ steps.review_evidence.outputs.review_evidence_title }}
+        run: |
+          set -eu
+          if [ -z "${HEAD_SHA:-}" ]; then
+            HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${VACUITY_PR}" --jq .head.sha)"
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/check-runs" \
+            --method POST \
+            --field name='🕵️ Review evidence verdict' \
+            --field head_sha="$HEAD_SHA" \
+            --field status=completed \
+            --field conclusion="$VERDICT_CONCLUSION" \
+            --field output[title]="$VERDICT_TITLE" \
+            --field output[summary]="$VERDICT_TITLE
+
+          Published by the \`🕵️ Review Evidence\` workflow. A \`neutral\` conclusion here means WAIVED: a declared review check said in its own words that it could not review, this pull request is UNREVIEWED, and merging it is a decision taken on that basis. It is deliberately not a failure — a pull request author cannot fix a vendor entitlement — and deliberately not a pass." \
+            > /dev/null

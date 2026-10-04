@@ -1,6 +1,6 @@
 ---
 name: lisa-wiki-doctor
-description: Verify that a wiki is correctly set up and (after migration) fully functional. Runs the deterministic checks plus functional smoke tests, writes a doctor report, and returns an overall verdict. Use as the final gate of /migrate, after /setup, or anytime to confirm wiki health. A repo is not "migrated" until its doctor verdict is READY.
+description: "Verify that a wiki is correctly…"
 ---
 
 # lisa-wiki-doctor

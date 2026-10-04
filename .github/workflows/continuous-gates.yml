@@ -1,0 +1,138 @@
+---
+# Seeded by Lisa on first setup — this file is YOURS.
+# Lisa will not overwrite it. (copy-overwrite assets ARE replaced each run.)
+#
+# The `continuous:<environment>` moment, on a schedule.
+#
+# Every other gate moment blocks a DIFF — the commit, the push, the merge, the
+# deploy. A continuous gate has no diff to block: it runs against a stable
+# target, and by the time it fails, whatever it covered merged hours ago. What it
+# establishes is whether that target is HEALTHY, and the enforcement point is
+# promotion out of it — a red `continuous:staging` means staging is not
+# promotable, which a `pre-deploy:production` gate can require.
+#
+# The clearest case is a CVE: one published today makes yesterday's green wrong
+# with no change to trigger a re-scan. A per-change gate cannot catch that,
+# because there is no change. Only a scheduled run can.
+#
+# ## Nothing runs until you declare something
+#
+# This workflow runs exactly what the `gates` block of `.lisa.config.json`
+# declares at `continuous:<environment>`, and nothing else. Out of the box that
+# is nothing, and this workflow fails with a configuration message until at
+# least one check is enabled for that environment. To use it, declare a gate:
+#
+# ```json
+# "gates": {
+#   "dependency-vulnerability": { "continuous:production": "required" },
+#   "runtime-web-vulnerability": { "continuous:production": "required" }
+# }
+# ```
+#
+# Eleven of Lisa's gates are legal here; `lisa-gates.mjs list
+# --moment=continuous:production` prints the ones this project can use, and
+# `validate` tells you when a declaration resolves to no prover.
+#
+# ## Customise the environment and the cadence
+#
+# `ENVIRONMENT` below is the suffix of the moment, so it must match what you
+# write in `.lisa.config.json`. Change the cron to suit — a load profile nightly
+# and a dependency scan hourly are two workflows, not one, and splitting them is
+# cheaper than running the expensive one twelve times a day.
+name: 🌙 Continuous Gates
+
+on:
+  schedule:
+    # 07:00 UTC daily.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment whose continuous gates to run.'
+        required: false
+        default: 'production'
+        type: string
+
+permissions:
+  contents: read
+
+# One run per environment. A second scheduled run arriving while the first is
+# still going would prove the same property about the same target twice, and the
+# provers here — a DAST scan, a load profile — are the ones that mind.
+concurrency:
+  group: continuous-gates-${{ inputs.environment || 'production' }}
+  cancel-in-progress: false
+
+jobs:
+  configured:
+    name: Configure continuous checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.23.3'
+      # This prerequisite belongs to this scheduled caller. Other callers of
+      # gates.yml keep their existing behavior when a moment declares no gates.
+      - name: Require checks for this environment
+        id: require_gates
+        env:
+          GATE_MOMENT: continuous:${{ inputs.environment || 'production' }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { existsSync } from 'node:fs';
+          import { resolve } from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          const resolver = [
+            'scripts/lisa-gates.mjs',
+            'node_modules/@codyswann/lisa/all/copy-overwrite/scripts/lisa-gates.mjs',
+            'all/copy-overwrite/scripts/lisa-gates.mjs',
+          ].find(file => existsSync(file));
+          if (!resolver) {
+            console.error('Cannot check continuous gates. Run lisa apply to install the gate resolver. No checks ran.');
+            process.exit(1);
+          }
+          const { readGates, resolveMoment } = await import(pathToFileURL(resolve(resolver)).href);
+          const moment = process.env.GATE_MOMENT;
+          const { gates, runner } = readGates();
+          if (resolveMoment({ gates, runner, moment }).length === 0) {
+            console.error(`No checks ran: configure at least one required or optional gate at ${moment} in .lisa.config.json. Gates set to off do not run.`);
+            process.exit(1);
+          }
+          console.log(`Checks configured for ${moment}; continuing to the gate runner.`);
+          NODE
+  continuous:
+    name: 🌙 Continuous Gates
+    needs: configured
+    uses: CodySwannGT/lisa/.github/workflows/gates.yml@995f533b00d9b8a60256096bf6d28940164cd893 # v4.69.1
+    with:
+      # Travels with the `uses:` line above — the two are one unit. Lisa's
+      # reusable workflows are tracked at `@main`, so that file changes under
+      # this repository with no pull request here. This is the contract major it
+      # spoke when Lisa seeded this file; the run fails loudly if it has since
+      # declared a break, and says NOT DETERMINED if this line goes missing
+      # (CodySwannGT/lisa#3698).
+      expected_workflow_contract_major: '1'
+      moment: continuous:${{ inputs.environment || 'production' }}
+      node_version: '22.23.3'
+      package_manager: 'npm'
+  # No `secrets:` key, deliberately. `gates.yml` declares none in its
+  # `workflow_call` and contains zero occurrences of the string `secret`, so
+  # there is nothing here to pass and the correct mapping is the empty one —
+  # which in GitHub's grammar is the absence of the key, not `secrets: {}`.
+  #
+  # This shipped as `secrets: inherit`, which handed the callee every secret in
+  # the repository to read none of them. SonarCloud flags it as "Only pass
+  # required secrets to this workflow" and it degrades `new_security_rating`,
+  # which blocks the merge on any project whose Sonar analysis covers
+  # `.github/**`. `lisa-update-projects` already warns operators off `inherit`
+  # for exactly this reason; the template should not have been doing it.
+  #
+  # If `gates.yml` ever does need a secret, add the named mapping for that one
+  # secret. Do NOT reach for `inherit`, and do NOT try to fix a permissions
+  # error here instead: `permissions` in a reusable workflow is a CEILING the
+  # caller must already hold, and a caller granting less than the callee
+  # declares makes the run fail to LOAD — no jobs, no check, and a required
+  # context that never reports at all.

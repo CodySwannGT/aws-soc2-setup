@@ -1,6 +1,6 @@
 ---
 name: lisa-research
-description: "Research a problem space and create a PRD in the configured PRD source. Investigates the codebase, defines user flows, assesses technical feasibility, synthesizes the spec, then creates it in the source (Notion / Confluence / GitHub / Linear per .lisa.config.json `source`) via lisa-prd-source-write — there is no loose document artifact. Vendor-agnostic. Accepts an optional `prd_ready` flag (default false → the PRD is created in the `draft` role; true → created `ready` so lisa-intake auto-claims it) and an optional dedupe `marker`/`dedupe_key` (used when invoked by lisa-project-ideation) so re-runs reference the existing PRD instead of duplicating it."
+description: "Research a problem space and…"
 allowed-tools: ["Skill", "Bash", "Read", "Glob", "Grep"]
 ---
 
@@ -20,12 +20,18 @@ Produce a PRD for the problem in `$ARGUMENTS`, then create it in the configured 
   structured metadata object to forward unchanged to `lisa-prd-source-write`. It carries the
   selected marker, automation id/path when available, persona names, persona evidence references,
   rejected overlap candidates, repo identity, `prd_ready`, selected idea title/key, and expected
-  empirical verification artifact. `research` may use these fields to inform the PRD body, but must
-  not discard, rename, or vendor-render them.
+  empirical verification artifact. When supplied, `reproposal_context` contains the dated decline,
+  new evidence, changed consequence, and the required machine token and human acknowledgment.
+  Include that token and acknowledgment verbatim in the synthesized PRD body before source routing,
+  so the justification survives even when the vendor's metadata renderer does not display this field.
+  Other metadata may inform the PRD body; forward the complete payload unchanged without renaming
+  or vendor-rendering its fields.
 
 ## Orchestration: agent team
 
-If you are NOT already operating inside an agent team (no prior successful team-creation or subagent-delegation tool call in this session, not spawned into a team context), the very first thing you do is establish team orchestration.
+You are "inside an agent team" only if you are yourself a spawned teammate or subagent — you were spawned into a team context, or your context names a team lead you report to. A lead/root session that has previously spawned subagents is still the lead and retains full authority to create this flow's team.
+
+If you are NOT inside an agent team by that definition, the very first thing you do is establish team orchestration.
 
 Use the team tool for the current runtime:
 
@@ -51,8 +57,26 @@ Execute the **Research** flow as defined in the `intent-routing` rule (loaded vi
 ## Output
 
 A PRD **created in the configured PRD source** (per the intent-routing rule's Research flow
-definition) containing: context, problem statement, user flows, acceptance criteria, technical
-feasibility notes, open questions, and the "Recommended Tooling for Plan Phase" section. The final
+definition) structured as: problem statement, high-level solution description, links (if needed),
+user stories (each with its own functional/non-functional requirements and, only for stories with
+new UI/visual work, a design-file pointer), overall acceptance criteria, open questions, and the
+"Recommended Tooling for Plan Phase" section. Requirements MUST conform to the
+`prd-definition-of-ready` rule: identified atoms (`R1`, `R2`, …), one behavior each in an
+EARS-pattern shape, each with a measurable fit criterion, plus the non-functional checklist. For any
+story with frontend scope, its user-facing behavior MUST be expressed as — or in a shape directly
+convertible to — Given/When/Then scenarios, naming the platforms each behavior must hold on, per the
+`bdd-e2e-coverage` rule; narrative-only frontend behavior forces that shape to be invented later,
+inconsistently, by whoever picks up the ticket. Where a requirement introduces or changes
+**persistent state** — anything the system writes that outlives the process that wrote it, rows being
+only one kind — the PRD MUST name that state and the reset policy it is expected to take, per the
+`reset-seed-coverage` rule, so the classification is a stated requirement rather than something
+discovered when a leaked record breaks a suite; that rule also covers the non-row cases (identity
+objects, object storage, search indexes, queues, caches, derived views) a narrative spec routinely
+omits. Each scenario stub carries its originating requirement
+atom (`R1`, `R2`, …) even though the stable `@BDD-<DOMAIN>-<NNN>` ID is not minted until Plan or
+Implement — this is what lets a later stage's provenance tag, and `spec-conformance`'s traceability
+check, walk back from a shipped scenario to the PRD requirement it was written to satisfy, instead of
+accepting any scenario with a stable ID as proof of this requirement. The final
 flow step invokes `lisa-prd-source-write`, which creates the PRD in the configured `source` (Notion
 page in the PRD database, Confluence page under the lifecycle parent, GitHub issue, or Linear
 project) in the `draft` role by default or `ready` when `prd_ready=true`. **The PRD lives in the

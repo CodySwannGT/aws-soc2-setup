@@ -1,6 +1,6 @@
 ---
 name: lisa-review-implementation
-description: This skill should be used when comparing a project's Lisa-managed files against Lisa's source templates to identify drift. It reads the project manifest, locates source templates, generates diffs for drifted files, and offers to upstream improvements back to Lisa.
+description: "comparing a project's…"
 ---
 
 # Lisa Implementation Review

@@ -1,4 +1,4 @@
 display_name: "Github Build Intake"
-short_description: "GitHub counterpart to lisa-jira-build-intake"
+short_description: "GitHub counterpart to…"
 default_prompt:
-  - "Use $lisa-github-build-intake: GitHub counterpart to lisa-jira-build-intake."
+  - "Use $lisa-github-build-intake: GitHub counterpart to…."

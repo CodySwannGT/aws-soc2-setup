@@ -1,4 +1,4 @@
 display_name: "Notion PRD Intake"
-short_description: "Scans a Notion PRD database for pages in the configured `ready` status and runs the first eligible one through the dry-run validation…"
+short_description: "Scans a Notion PRD database for…"
 default_prompt:
-  - "Use $lisa-notion-prd-intake: Scans a Notion PRD database for pages in the configured `ready` status and runs the first eligible one through the dry-run validation…."
+  - "Use $lisa-notion-prd-intake: Scans a Notion PRD database for…."

@@ -1,6 +1,6 @@
 ---
 name: lisa-wiki-connector-roles
-description: Ingest the wiki's own digital-staff roster (config.staff[] + wiki/staff/*) into a sanitized source note. Use only when lisa-wiki-ingest routes to the roles connector. Does not run any subagent.
+description: "Ingest the wiki's own…"
 ---
 
 # lisa-wiki-connector-roles

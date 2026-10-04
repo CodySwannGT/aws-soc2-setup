@@ -1,6 +1,6 @@
 ---
 name: lisa-tracker-write
-description: "Vendor-neutral wrapper for ticket creation and updates. Reads the required `tracker` from .lisa.config.json and dispatches to lisa-jira-write-ticket, lisa-github-write-issue, or lisa-linear-write-issue. Callers in vendor-neutral skills (notion-to-tracker, linear-to-tracker, confluence-to-tracker, github-to-tracker, implement, verify) MUST invoke this skill instead of the vendor-specific ones — that is what makes the tracker switchable per project. The Phase-5.5 validate-pre-write gate, post-write verify, and Phase-8 announce-comment behavior live in the vendor skills; this shim is dispatch only."
+description: "Vendor-neutral wrapper for…"
 allowed-tools: ["Skill", "Bash", "Read"]
 ---
 
@@ -52,3 +52,4 @@ See the `config-resolution` rule for the full configuration schema and skill-map
 - Never accept a tracker value outside `{jira, github, linear}`.
 - Never mutate `$ARGUMENTS` between layers. The vendor skills define their own input contract.
 - Never inline gate logic here. All validation rules live in the vendor skills (`lisa-jira-validate-ticket` / `lisa-github-validate-issue` / `lisa-linear-validate-issue`); this skill only routes.
+- **Readiness is the caller's explicit claim, not this shim's default.** Per the `ready-role-filing` rule, an omitted `build_ready` is **not build-ready** on every vendor, so a caller filing work it expects build-intake to pick up must pass `build_ready: true`, and a caller deliberately holding work outside the queue must pass a `human_gate` reason. This shim normalizes nothing — it forwards `$ARGUMENTS` verbatim and the vendor writers enforce the contract — which is exactly why the caller cannot rely on a vendor default here.

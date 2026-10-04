@@ -1,6 +1,6 @@
 ---
 name: lisa-wiki-tear-down-automations
-description: "Remove the recurring LLM Wiki ingest automation that /lisa-wiki:setup-automations created for this project (the lisa-wiki-auto-<project>-* set) using the CURRENT runtime's native scheduler — Codex automations or, on Claude, /schedule. This skill is a declarative specification: it identifies WHICH automation to remove; it does not run teardown scripts. Removes only this project's wiki automations — never the base /setup-automations set, other projects' automations, or non-Lisa ones. The inverse of /lisa-wiki:setup-automations."
+description: "Remove the recurring LLM Wiki…"
 allowed-tools: ["Skill", "Bash", "Read"]
 ---
 

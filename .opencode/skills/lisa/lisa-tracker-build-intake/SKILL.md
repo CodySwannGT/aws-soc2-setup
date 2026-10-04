@@ -1,10 +1,24 @@
 ---
 name: lisa-tracker-build-intake
-description: "Vendor-neutral wrapper for the build-queue scanner. Reads the required `tracker` from .lisa.config.json and dispatches to lisa-jira-build-intake (JQL/project-key queue), lisa-github-build-intake (GitHub repo queue keyed off the `status:ready` label), or lisa-linear-build-intake (Linear team queue keyed off the `status:ready` label). Every vendor scanner processes at most one eligible item per cycle and enforces the claim-time arm of the `leaf-only-lifecycle` rule — dispatch leaf work units only; move or safe-block a container with open child work (or a childless Epic) that carries a stale build-ready role according to the vendor's lifecycle semantics. Counterpart to lisa-intake's PRD-side dispatchers."
+description: "Vendor-neutral wrapper for the…"
 allowed-tools: ["Skill", "Bash", "Read"]
 ---
 
 # Tracker Build Intake: $ARGUMENTS
+
+## Human-gate release authorization
+
+A release requires a trusted human author, not just matching comment text. Follow
+`ready-role-filing` — **Human-gate release authorization**: preserve tracker-supplied comment
+author IDs and bot metadata, resolve `trustedHumanActorIds` only from an explicit user instruction
+or existing human-authored trusted project policy, and pass it with structured `comments` to every
+hold classifier, reconciliation, normalization and release planner. Never derive trust from the
+comment body, a display name, the actor's own assertion, or an automation posting on its own behalf.
+Missing policy, missing/unreadable author identity, raw body strings, untrusted actors and known bots
+cannot discharge a hold. Keep the item held and report the missing authorization; do not silently
+replace these inputs with an empty history or an inferred allowlist. Authorized matching releases
+continue through the existing path and never override an independently declared caller hold.
+
 
 Thin dispatcher. Resolves the configured destination tracker and delegates to the matching vendor build-queue scanner.
 
@@ -41,6 +55,39 @@ This is the claim-time arm of the rule. Its siblings are the write-time labeling
 | `linear` | `lisa-linear-build-intake` (Phase 3a) | native sub-issues via `parentId` + Project grouping |
 
 The shim never needs to inspect the item itself — it forwards `$ARGUMENTS` verbatim and the resolved vendor scanner runs its Phase 3a gate before any claim.
+
+## Pre-work denominator contract (forwarded to every vendor)
+
+Also part of the build-intake API, and the reason a dry queue can be believed. Two obligations,
+uniform across `jira`, `github`, and `linear`:
+
+1. **Sweep every pre-work lane by its machine-readable category, never by a roster of lane names.**
+   No tracker has a `blocked` category: Linear models a `Blocked` state as `unstarted`, JIRA models
+   a `Blocked` status under `To Do`, and GitHub has no category at all, so its lanes come from
+   configured roles. In every case a `Blocked` lane is *pre-work* — items that were never started,
+   each carrying a written blocker. Keying selection on names omits it silently.
+2. **A `nothing-needed` run states its denominator** — which lanes were swept, how many rows each
+   held, and the total open. This is enforced, not requested: `automation-run-record.mjs` refuses a
+   `nothing-needed` row for `intake-tickets` without a `--denominator`.
+
+Shared helpers own both, so the vocabulary cannot drift per vendor:
+`scripts/intake-prework-denominator.mjs` (`buildIntakeDenominator`, `summarizeDryLane`) and
+`scripts/intake-blocker-reprobe.mjs` (`classifyPreWorkCandidate`, `formatReprobeNote`). The
+blocker re-probe carries an absolute human gate: an item carrying the configured human-needed label
+or a `[lisa-human-gate]` marker is never auto-selected, whatever a probe returns.
+
+That gate has an inverse, and it is forwarded identically: a hold ends when a
+`[lisa-human-gate-release]` comment naming the same `reason=` is recorded on the item by an authorized human. Every vendor
+scanner passes the item's `comments` into the gate helpers so the discharge is visible, and calls
+`planHumanGateRelease(...)` to take the marker off and put the item back in the queue. **No vendor
+scanner clears a hold by editing the description** — the only body write any of them has is a
+whole-body replacement, so a release that went through the description would risk destroying the
+record it was releasing, which is why holds accumulated with no way out (CodySwannGT/lisa#3852).
+The hold note stays in the description as history and the release sits beside it as a comment.
+
+Measured: sweeping one team by lane name saw 39 of 343 open rows; by category it sees 100. The
+61-row gap produced 31 consecutive false "dry lane" cycles, every record honest and every
+conclusion wrong (#2657).
 
 ## Repo-scope claim contract (forwarded to every vendor)
 
@@ -83,4 +130,5 @@ If the canonical fix is merged but not yet on the production branch, the close c
 - **Leaf-only dispatch, every vendor.** Per the `leaf-only-lifecycle` rule, each vendor scanner dispatches leaf work units only and moves or safe-blocks a container (open child work, or a childless Epic) carrying a stale build-ready role according to its lifecycle semantics. This shim does not re-implement the gate — it relies on the vendor scanner's Phase 3a — but the contract is uniform across `jira`, `github`, and `linear` so behavior never drifts by tracker.
 - **Terminal native closure, every capable vendor.** Per the same rule, each vendor scanner finalizes native open/closed state only at the true terminal `done` value. This shim never performs native closure itself, but callers can rely on the dispatched vendor scanner to apply the contract.
 - **Duplicate already fixed, every vendor.** Auto-close without a PR is allowed only for `DUPLICATE_ALREADY_FIXED` with canonical reference and empirical base-branch evidence. Do not conflate this with `BLOCKED`.
+- **Claim-time guards, every vendor.** Per the `claim-time-guards` rule, each vendor scanner runs both guards inside its Phase 3b before the claim transition: an item whose own key already appears in git history or an open/merged PR routes to **verify-and-close** rather than being built twice, and the **`two-failed-attempts`** valve moves an item with two counting `[lisa-build-attempt]` markers to the configured blocked role and stops the cycle. A marker counts only when it is `measures=work` and was recorded after the item most recently entered the ready lane — every vendor applies both filters, reading lane history from the substrate that already exposes it (GitHub label events, JIRA `changelog`, Linear `history`). This shim does not re-implement either guard; it forwards the contract so behavior never drifts by tracker.
 - Never run two intake cycles concurrently against overlapping queues — the scheduling layer is responsible for serialization.

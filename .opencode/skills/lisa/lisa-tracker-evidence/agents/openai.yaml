@@ -1,4 +1,4 @@
 display_name: "Tracker Evidence"
-short_description: "Vendor-neutral wrapper for posting verification evidence"
+short_description: "Vendor-neutral wrapper for…"
 default_prompt:
-  - "Use $lisa-tracker-evidence: Vendor-neutral wrapper for posting verification evidence."
+  - "Use $lisa-tracker-evidence: Vendor-neutral wrapper for…."

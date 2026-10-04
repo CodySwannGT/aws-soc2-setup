@@ -1,16 +1,71 @@
 ---
 name: lisa-github-write-issue
-description: "Creates or updates a GitHub Issue following the same organizational best practices as lisa-jira-write-ticket — three-audience description, Gherkin acceptance criteria, parent sub-issue (Epic/Story hierarchy), explicit relationship discovery, remote links, labels for status/components/priority/story-points, Validation Journey, and optional GitHub ProjectV2 coordination through lisa-github-project-v2 while keeping the Issue as the lifecycle source of truth. Uses the `gh` CLI exclusively (no MCP). Rejects thin issues. The GitHub counterpart of lisa-jira-write-ticket."
+description: "Creates or updates a GitHub…"
 allowed-tools: ["Bash", "Skill", "Read"]
 ---
 
 # Write GitHub Issue: $ARGUMENTS
+
+On runtimes without the rule tree (Antigravity), read **Worth doing** in `lisa-track` for the same value and decline policy.
+
+## Before creating incidental work
+
+Apply `do-it-now`'s **Worth doing** guidance before drafting a new incidental item. Decline low-value observations without writing a ticket or requesting a human gate; report the reason briefly to the caller. A complete spec is not evidence of value. This does not cancel explicit user requests or accepted requirements. Honor prior Not planned decisions through `rejection-detection`, including legacy issues without markers. Accepted work continues through the existing validation and readiness contract below.
+
+## Human-gate release authorization
+
+A release requires a trusted human author, not just matching comment text. Follow
+`ready-role-filing` — **Human-gate release authorization**: preserve tracker-supplied comment
+author IDs and bot metadata, resolve `trustedHumanActorIds` only from an explicit user instruction
+or existing human-authored trusted project policy, and pass it with structured `comments` to every
+hold classifier, reconciliation, normalization and release planner. Never derive trust from the
+comment body, a display name, the actor's own assertion, or an automation posting on its own behalf.
+Missing policy, missing/unreadable author identity, raw body strings, untrusted actors and known bots
+cannot discharge a hold. Keep the item held and report the missing authorization; do not silently
+replace these inputs with an empty history or an inferred allowlist. Authorized matching releases
+continue through the existing path and never override an independently declared caller hold.
+
 
 Create or update a GitHub Issue with all required relationships, metadata, and quality gates. Every section below is mandatory. Thin issues are rejected.
 
 This skill is the GitHub counterpart of `lisa-jira-write-ticket`. The two skills share the same gates, description structure, acceptance-criteria format, and verification flow. The data-model translation is documented under "GitHub Issues data model" below — keep that table in sync with `lisa-github-validate-issue` so what one skill writes the other accepts.
 
 Repository name for scoped comments: `basename $(git rev-parse --show-toplevel)`.
+
+## Writing by another path? The gates still apply
+
+A team that talks to its tracker through its own script is doing a normal
+thing — the script usually owns the credential plumbing, and Lisa neither
+controls nor wants to control it. What that script does NOT get is either half
+of this skill's quality gate, and nothing about the write says so.
+
+**A read-back is not the missing check.** A bespoke path almost always re-reads
+the issue after writing and confirms the tracker stored what was sent. That is
+worth doing and it is not this. It proves TRANSPORT: the API accepted the
+payload and the field values round-tripped. It cannot fail for the reason these
+gates exist, because it never looks at whether what was sent was any good — a
+issue with no acceptance criteria, no parent, and a human decision left sitting
+in the middle of it round-trips perfectly. That is the dangerous half of the
+shape: a failing control gets investigated, a misread one gets trusted.
+
+So a write by any other path still owes both phases, and both run standalone
+against an item that already exists:
+
+| Phase | Skill | What it costs you |
+|---|---|---|
+| Pre-write validate | `lisa-github-validate-issue` | Run it on the draft before you send it |
+| Post-write verify | `lisa-github-verify` | Run it on the live issue after you send it |
+
+```text
+Skill(lisa-github-validate-issue) with the draft issue, or with a reference to a live one
+Skill(lisa-github-verify) with owner/repo#1234
+```
+
+**These are plugin-resident skills invoked through the Skill tool.** They are
+not shell scripts and will not appear in any repository's `scripts/` directory,
+including yours. An agent that searches the repo it is standing in, finds
+nothing, and concludes the capability is absent has made the one mistake that
+turns a local script from the convenient option into the only one.
 
 ## Prerequisites
 
@@ -38,9 +93,10 @@ Resolve `<ORG>` and `<REPO>` from the ref or from `.lisa.config.json`.
 | Priority | CREATE | Label `priority:<low|medium|high|critical>`. |
 | Acceptance criteria | Story, Task, Bug, Sub-task, Improvement | Gherkin in `## Acceptance Criteria` — see Phase 3. |
 | Validation Journey | Runtime-behavior changes | Delegate to `/github-add-journey`. |
-| Target backend environment | Runtime-behavior changes | Recorded under `## Target Backend Environment`. Skip only for doc / config / type-only. |
+| Target backend environment | Runtime-behavior changes | For every work type, use an exact `deploy.branches` key when an environment is known. Human: bare key or `Confirmed: <env>`. Automation: `Inferred: <env> — evidence: <title\|body\|reproduction\|hostname>`, `Assumption: <env> — remote default branch <branch>` for a unique reverse-map, or `Assumption: remote default branch <branch>` otherwise. Human confirmation replaces an automated annotation with the bare key or `Confirmed: <env>`. |
 | Sign-in account / credentials | Authenticated-surface tickets | Recorded under `## Sign-in Required`. |
 | Repository | Bug, Task, Sub-task | GitHub Issues live in exactly one repo by definition — record the repo name under `## Repository`, and reject any AC bullet that references a different repo. |
+| Source Requirement | PRD-sourced issues (`prd_source` provided) | `## Source Requirement` with PRD link + verbatim requirement quote(s) — see Phase 3; enforced at every level, sub-issues included. |
 
 Optional but recommended: assignee, milestone, components (label `component:<name>`), story points (label `points:<n>`), labels.
 
@@ -51,6 +107,20 @@ Use `gh api repos/<org>/<repo>/labels --paginate` to discover existing labels be
 The description (issue body) MUST address three audiences. Reject and rewrite if any are missing.
 
 ```markdown
+## Source Requirement
+[Required whenever the issue originates from a PRD (the caller passes
+ `prd_source`). Answers "why was this done?" — cite the PRD and quote the
+ requirement(s) VERBATIM, never paraphrased:
+ - **PRD**: <PRD title + link> §"<section heading>"
+ - **Requirement (R3)**: "<verbatim requirement text from the PRD>"
+ One Requirement line per satisfied requirement. Derived / cross-cutting
+ work that traces to no single requirement uses the supporting form:
+ "Derived work supporting R3, R7 — no single PRD section." Close with:
+ "This issue exists to satisfy the quoted requirement. If implementation
+ scope drifts from the quoted text, the PRD is the authority — raise the
+ conflict rather than silently reinterpreting it." Omit the section only
+ for ad-hoc issues with no PRD lineage.]
+
 ## Context / Business Value
 [Why this matters. Stakeholder-facing. Concrete user impact or business outcome.
  Link to the originating Slack thread, PRD page, incident, or customer report.]
@@ -76,8 +146,39 @@ Scenario: <name>
 [Explicit list of what this issue does NOT cover. Forces scope discipline.]
 
 ## Target Backend Environment
-[Required when the issue changes runtime behavior. One of: dev / staging / prod.
- Skip section entirely for doc-only, config-only, or type-only issues.]
+[ALWAYS required on a leaf — the SECTION is unconditional, only its
+ VALUE is conditional. It is where `runtime_behavior_change` is
+ persisted, so omitting it records nothing rather than recording "no".
+ When the issue changes runtime behavior, use an exact
+ `deploy.branches` key. A human-confirmed value is a bare key or
+ `Confirmed: <env>`. An automated evidence write is
+ `Inferred: <env> — evidence: <title|body|reproduction|hostname>`; an automated
+ generic default is `Assumption: <env> — remote default branch <branch>`.
+ Without a unique reverse-map use `Assumption: remote default branch <branch>`.
+ Human confirmation replaces the automated annotation with a bare key or
+ `Confirmed: <env>`. ALWAYS render this section — it is where
+ `runtime_behavior_change` is persisted, and an absent section reads as
+ *underivable*, not exempt. Work that changes no runtime behavior declares the
+ exemption in place of an environment: `None — no runtime behavior change:
+ doc-only` (or `config-only` / `type-only`). An Epic/container declares
+ `None — container: state rolls up from children`. Visible prose, not an HTML
+ comment, for the same reason the Branch Plan provenance line is: JIRA's ADF has
+ no comment node. See the `derived-branch-plan` rule.]
+
+## Branch Plan
+[GENERATED, never hand-authored. Render only when the issue has a Target
+ Backend Environment; omit entirely when `runtime_behavior_change = false`
+ (doc-only / config-only / type-only) or for an Epic/container — absence is
+ correct there. Derive per the `derived-branch-plan` rule: resolve the
+ environment, map it forward through `.lisa.config.json` `deploy.branches`,
+ and prove the branch exists on the remote. Do not accept caller-supplied
+ branches; recompute them. Exactly three lines:
+   Branch from: <branch>
+   PR into: <branch>
+   Derived from: Target Backend Environment <env> via .lisa.config.json deploy.branches
+ Both fields name the same branch by construction. A missing, ambiguous, or
+ non-unique mapping, or a branch absent from the remote, STOPS the write —
+ never default to `main` or the remote default to keep the write alive.]
 
 ## Sign-in Required
 [Include this section ONLY if the work touches authenticated surfaces.
@@ -111,10 +212,13 @@ Scenario: <name>
 
 ## Validation Journey
 [Delegate to /github-add-journey if the issue changes runtime behavior.
- Skip only for doc-only, config-only, or type-only issues.]
+ Skip only for doc-only, config-only, or type-only issues. Cross-work-item
+ evidence pointers use `[EVIDENCE-REF: <work-item-ref> | <artifact-type>: <kebab-case-name>]`;
+ they never replace this issue's local S14 marker.]
 ```
 
 Rules:
+- PRD-sourced issues (caller passed `prd_source`) MUST carry the Source Requirement section with verbatim quotes — paraphrases are rejected (validator gate S16). This applies at every level, sub-issues included: a leaf claimed in isolation must explain its own "why".
 - Every acceptance criterion uses Given/When/Then. No vague "should work" language.
 - Every criterion is independently verifiable.
 - If the issue is a Bug, include reproduction steps, expected vs. actual behavior, and environment.
@@ -193,7 +297,7 @@ GitHub Issues uses **labels** for the structured metadata that JIRA stores in cu
 
 | Concept | Label format | Example |
 |---------|--------------|---------|
-| Issue type | `type:<value>` | `type:Story`, `type:Bug`, `type:Epic`, `type:Sub-task`, `type:Spike`, `type:Improvement` |
+| Issue type | `type:<value>` | `type:Epic`, `type:Story`, `type:Task`, `type:Bug`, `type:Sub-task`, `type:Spike`, `type:Improvement` |
 | Status | `status:<value>` | `status:ready`, `status:in-progress`, `status:on-dev`, `status:done` |
 | Priority | `priority:<value>` | `priority:low`, `priority:medium`, `priority:high`, `priority:critical` |
 | Components | `component:<name>` | `component:auth`, `component:billing` |
@@ -214,11 +318,58 @@ For non-build-ready issues created fresh (Epics, Stories, and other containers),
 
 ### Build-ready control input (`build_ready`)
 
-`build_ready` is an optional write-control input (default: **omitted**). It governs whether a **leaf** work unit is stamped with the build-ready role on create. It never overrides `leaf-only-lifecycle` — a container is never stamped build-ready regardless of `build_ready`. "Not build-ready" is not a special status: it simply means the issue is created in its natural default (a plain open issue with **no `status:ready` label**), which a human can promote later.
+`build_ready` is a write-control input governed by the `ready-role-filing` rule — cite that slug for the full contract; do not restate its per-vendor normalization table here. It decides whether a **leaf** work unit is stamped with the build-ready role on create. It never overrides `leaf-only-lifecycle` — a container is never stamped build-ready regardless of `build_ready`. "Not build-ready" is not a special status: it simply means the issue is created in its natural default (a plain open issue with **no `status:ready` label**), which a human can promote later.
 
-- **Omitted** → current behavior: a leaf work unit receives `status:ready`. Preserves what every existing caller (`lisa-plan`, the `*-to-tracker` skills) relies on.
+- **Omitted** → **not build-ready**: the leaf is created without `status:ready`. Ready is an explicit claim, never a vendor default. **This is a breaking change** — GitHub previously applied `status:ready` on omission, so a caller that relied on that must now pass `build_ready: true`.
 - **`build_ready: false`** → create the leaf **without** `status:ready`, so it sits in the backlog for a human to review and promote into the queue.
 - **`build_ready: true`** → ensure the leaf carries `status:ready` so `lisa-intake` / `lisa-github-build-intake` auto-picks it up.
+
+**A filing with neither is an incomplete handoff.** A leaf that is not build-ready must carry an explicit `human_gate: "<why a human must judge this first>"`; nothing in the ready lane means nothing ever claims it. When `human_gate` is supplied, stamp the hold on the issue so it is auditable — a visible line plus the verbatim marker:
+
+```text
+Held for a human product call: <reason>.
+<!-- [lisa-human-gate] reason=<short-slug> -->
+```
+
+**Stamp both surfaces, not just the marker.** Also apply the configured `human_needed` marker
+label (`github.labels.build.human_needed`, default `human-needed`) to the issue, via `gh issue edit`/`gh issue create --label`. The marker in the body and the label say the same thing,
+and a filing that carries only one of them is a **half-armed gate**: sweeps that read the body
+honour it, and sweeps that read labels do not. That is not hypothetical — the repair sweep that
+normalizes items carrying no lifecycle label keys on the *absence* of `human_needed`, so a
+marker-only hold was its population by construction and got promoted into the build queue (#3805).
+The marker remains the authoritative declaration; the label is what makes the hold visible to a
+person scanning a board and to any path that has not yet been routed through the shared reader.
+If the label does not exist in the tracker, create it, or record that it could not be applied and
+proceed — the marker still holds. Never file the label *instead of* the marker.
+
+**Write a `reason=` the release can name.** The hold's reason is not decoration: a hold ends when a
+`[lisa-human-gate-release]` comment repeating that same `reason=` is recorded on the item by an authorized human, and the
+next intake sweep then takes the marker label off and puts the item back in the build-ready role on
+its own. Matching is per-reason so that a hold declared *after* an earlier release is not born
+discharged. A keyless hold is legal and is discharged by a keyless release; a hold whose reason is a
+paragraph is legal and nobody will reproduce it. Prefer a short slug the person answering it can
+retype. Do **not** instruct anyone to delete the marker from the description to lift the hold — the
+only body write available is a whole-body replacement, so that asks them to rewrite the whole record
+to clear one line, which is why answered holds accumulated instead of being lifted
+(CodySwannGT/lisa#3852). The marker stays as history; the release is recorded beside it.
+
+If a leaf arrives with `build_ready` omitted or `false` **and** no `human_gate`, do not create it: report the incomplete handoff and name both ways to resolve it (`build_ready: true`, or a `human_gate` reason). Containers are exempt — their state rolls up from children, so they need neither.
+
+**The container exemption is executable, not prose.** It used to live only in the sentence above,
+which meant the `block-direct-issue-create.sh` guard — the control that actually runs on the CLI
+path — had no arm for it, and a container could satisfy that guard only by declaring a build-ready
+role `leaf-only-lifecycle` forbids on it or a human gate it does not have. A container now declares
+a **third** thing, and this skill already writes it: the canonical Target Backend Environment value
+`None — container: state rolls up from children`, defined once by `derived-branch-plan`. The guard
+reads that one string, so there is nothing for the skill and the guard to disagree about.
+
+Two consequences for a container written from here. Render the Target Backend Environment section
+with that exact value — an absent section reads as *underivable*, not exempt, and leaves the guard
+nothing to read. And do not put a **by-design leaf type** (`type:Bug` / `type:Task` /
+`type:Sub-task` / `type:Improvement`) on a filing carrying that declaration: an item cannot be a
+container and a leaf at once, and the guard refuses the combination. `type:Story` and `type:Spike`
+are not in that set, because `leaf-only-lifecycle`'s childless-parent exception makes them
+leaf-or-container depending on child work.
 
 ## Phase 5.5 — Validate (Pre-write Gate)
 
@@ -232,9 +383,9 @@ If the validator reports `FAIL`, do NOT proceed to Phase 6. Fix the spec and re-
 
 ### CREATE
 
-1. Compose the body markdown from Phases 2/3/4 in a temp file (avoid quoting hell). Apply `status:ready` **only for a leaf work unit** per the Phase 5 leaf-only rule (`leaf-only-lifecycle`) — omit it for `Epic` / `Story` / `Spike` and any issue that has child work, **and** only when `build_ready` is not `false` (a leaf with `build_ready: false` is created without `status:ready`; see the Build-ready control input):
+1. Compose the body markdown from Phases 2/3/4 in a temp file (avoid quoting hell). Apply `status:ready` **only for a leaf work unit** per the Phase 5 leaf-only rule (`leaf-only-lifecycle`) — omit it for `Epic` / `Story` / `Spike` and any issue that has child work, **and** only when `build_ready` is explicitly `true` (a leaf with `build_ready` omitted or `false` is created without `status:ready`; see the Build-ready control input):
    ```bash
-   # Leaf work unit (Bug / Task / Sub-task / Improvement with no children), build_ready not false:
+   # Leaf work unit (Bug / Task / Sub-task / Improvement with no children), build_ready: true:
    gh issue create \
      --repo <org>/<repo> \
      --title "<summary>" \
@@ -243,9 +394,10 @@ If the validator reports `FAIL`, do NOT proceed to Phase 6. Fix the spec and re-
      [--label "component:<name>" ...] [--milestone "<milestone>"] \
      [--assignee "<login>"]
 
-   # Container (Epic / Story / Spike / any issue with child work), OR a leaf with build_ready: false:
+   # Container (Epic / Story / Spike / any issue with child work), OR a leaf whose build_ready is
+   # omitted or false (and which therefore carries an explicit human_gate):
    # identical, but WITHOUT --label "status:ready" — a container's state rolls up from children;
-   # a build_ready: false leaf waits in the backlog for a human to promote it.
+   # a human-gated leaf waits in the backlog for a human to promote it.
    gh issue create \
      --repo <org>/<repo> \
      --title "<summary>" \
@@ -323,6 +475,46 @@ The mapping below is the single source of truth for how JIRA concepts translate 
 | Custom-field "Reporter" (the human) | The issue's `author` (immutable) plus the `Filed by:` line in the body |
 | Worklog | Comments (no native time tracking) |
 | Triage marker | Label `claude-triaged-<repo>` |
+
+## Writing by a bespoke path (your own script, direct API or GraphQL)
+
+Nothing here stops a consumer from writing to GitHub through `gh issue create` directly, the GitHub REST or GraphQL API, or your own script, and nothing should
+try to — a script that owns the credential plumbing is often the only practical transport.
+**The transport is not the gate.** A bespoke write path still owes both halves of the quality
+gate this skill runs, and owes them explicitly, because no phase of this flow will ever run
+for it.
+
+A bespoke script's own read-back does not discharge either obligation. Re-reading the issue
+and confirming GitHub stored what was sent **proves transport, not quality**: it shows the
+fields round-tripped and says nothing about whether what was sent clears a single gate. An
+agent that reads `VERIFIED` out of such a script has been told the issue was checked when it
+was not. Measured once, on one issue, on 2026-09-03 (CodySwannGT/lisa#3663): a local
+script's read-back was clean on every field, and the issue then failed gates S5, S9 and S18
+when the validator was run against it by hand.
+
+What a bespoke write path still owes — the same two checks, invoked by hand:
+
+1. **Pre-write validate**, the obligation Phase 5.5 discharges here. Invoke `lisa-github-validate-issue` via
+   the Skill tool with the proposed spec as a YAML block **before** writing. Never write on a
+   `FAIL` verdict.
+2. **Post-write verify**, the obligation Phase 7 discharges here. Invoke `lisa-github-verify` via the
+   Skill tool with the identifier of the issue you just wrote — or `lisa-github-validate-issue` directly in
+   identifier mode, which fetches and validates the live state. Never report success on a
+   `FAIL` verdict.
+
+Both run standalone against an existing live issue; `lisa-github-validate-issue` documents the copy-pasteable
+invocation under its standalone entry point.
+
+**Three outcomes, never two.** `PASS`, `FAIL` and *could not validate* are distinct results.
+If the validator did not run to a verdict — the skill was unavailable, a credential was
+missing, the issue could not be fetched — that is **not** a pass. Report it as unvalidated and
+say why. Collapsing "could not validate" into "validated" is the same misreading as trusting
+a read-back.
+
+**These are skills, not scripts.** `lisa-github-validate-issue` and `lisa-github-verify` are plugin-resident and invoked
+through the Skill tool. They are **not** expected to appear in any repository's `scripts/`
+directory, and their absence from one is not evidence that the capability is missing —
+searching the repository you happen to be standing in is the wrong search.
 
 ## Rules
 

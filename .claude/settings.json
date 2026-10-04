@@ -11,9 +11,7 @@
     "pr": "🤖 Generated with Claude Code"
   },
   "permissions": {
-    "deny": [
-      "Read(./.entire/metadata/**)"
-    ]
+    "deny": []
   },
   "hooks": {
     "WorktreeCreate": [
@@ -26,12 +24,52 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "EnterWorktree",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/scripts/lisa-hooks/worktree-binding-guard.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/scripts/lisa-enforcement-fallback.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/scripts/lisa-enforcement-fallback.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/scripts/lisa-hooks/worktree-binding-guard.sh"
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {
     "lisa-wiki@lisa": true,
     "lisa@lisa": true,
-    "safety-net@cc-marketplace": true,
     "code-simplifier@claude-plugins-official": true,
     "code-review@claude-plugins-official": true,
     "coderabbit@claude-plugins-official": true,
@@ -39,7 +77,9 @@
     "skill-creator@claude-plugins-official": true,
     "lisa-typescript@lisa": true,
     "typescript-lsp@claude-plugins-official": true,
-    "atlassian@claude-plugins-official": true
+    "atlassian@claude-plugins-official": true,
+    "cc-safety-net@cc-marketplace": true,
+    "safety-net@cc-marketplace": false
   },
   "extraKnownMarketplaces": {
     "CodySwannGT/lisa": {

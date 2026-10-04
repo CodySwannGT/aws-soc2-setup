@@ -1,6 +1,6 @@
 ---
 name: lisa-jira-read-ticket
-description: "Fetches the full scope of a JIRA ticket — metadata, description, acceptance criteria, all comments, remote links (PRs, Confluence, dashboards), issue links (blocks/is blocked by/relates to/duplicates/clones), epic parent with siblings, and subtasks. Produces a consolidated context bundle that downstream agents consume so they never act on a single ticket in isolation."
+description: "Fetches the full scope of a…"
 allowed-tools: ["Bash", "Skill"]
 ---
 
@@ -46,7 +46,7 @@ The Atlassian MCP exposes attachment metadata but no binary-fetch tool ([JRACLOU
 bash .claude/skills/jira-read-ticket/scripts/download-attachment.sh <id-or-content-url> <output-path>
 ```
 
-Requires `JIRA_SERVER`, `JIRA_LOGIN`, and `JIRA_API_TOKEN` in the environment (same contract as `jira-evidence`). If those are not set the helper exits with code 2 and a clear remediation message — record the URL only and continue.
+Requires `python3` and `JIRA_API_TOKEN`. `JIRA_SERVER` and `JIRA_LOGIN` prefer environment values, then the project's `.lisa/jira-cli/.config.yml`, then the announced home config fallback. Missing credentials produce exit code 2 — record the URL only and continue. The server must be a bare HTTPS origin without userinfo, path prefix, query, or fragment. A full attachment URL must use that same origin; invalid destinations are rejected before Basic authorization is constructed. Signed external downloads receive no Basic credentials and use HTTPS only.
 
 After download, branch on `mimeType`:
 - `image/*` — pass the local path to image-aware downstream tools
@@ -56,7 +56,7 @@ After download, branch on `mimeType`:
 
 ### Comments
 
-Fetch ALL comments in chronological order. Do not truncate. For each:
+Fetch ALL comments in chronological order via `lisa-atlassian-access` `operation: comments key: <TICKET-KEY>`, which pages until every comment is read — the comments embedded in `read-ticket` are only the first page. Do not truncate. If the result reports `comments_complete: false` (a failed page, or an MCP-only read that could not page), say so at the top of the bundle's Comments section with the fetched-versus-total counts, so no downstream agent mistakes a partial set for the whole. For each:
 - Author, timestamp, body
 - Flag comments that contain: credentials, reproduction steps, status updates from stakeholders, decisions, or triage headers like `[repo-name]`
 
@@ -94,7 +94,7 @@ For each linked ticket, invoke `lisa-atlassian-access` with `operation: read-tic
 
 If the primary ticket has an epic parent (or IS an epic):
 
-1. Fetch the epic itself via `lisa-atlassian-access` `operation: read-ticket key: <EPIC-KEY>` — full description, acceptance criteria, all comments, Validation Journey.
+1. Fetch the epic itself via `lisa-atlassian-access` `operation: read-ticket key: <EPIC-KEY>` — full description, acceptance criteria, Validation Journey — and its comments, all of them, via `lisa-atlassian-access` `operation: comments key: <EPIC-KEY>`.
 2. Find epic siblings via JQL:
    ```jql
    "Epic Link" = <EPIC-KEY> AND key != <TICKET-KEY>
@@ -135,7 +135,8 @@ Produce a single structured output that the caller can pass verbatim to downstre
 ### Validation Journey
 <section or "None">
 
-### Comments (<count>)
+### Comments (<fetched> of <total>; comments_complete: <true|false>)
+<when incomplete: "INCOMPLETE — <fetched> of <total> comments read via <substrate>">
 <chronological comments, flagged items called out>
 
 ### Attachments

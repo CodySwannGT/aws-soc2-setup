@@ -1,0 +1,38 @@
+# BEGIN: AI GUARDRAILS
+
+# The project learnings ledger is written by concurrent learner passes that
+# each run on their own branch. Git's default line merge corrupts it with
+# conflict markers; this driver merges entries by id and fingerprint. The
+# driver preserves concurrent stable-id successors instead of guessing. Its
+# command is machine-local — run `lisa install-merge-driver` to register it.
+# `lisa doctor` already reports this as "Merge drivers registered?" when a
+# mapping here has no registered driver — named at the symptom site on
+# purpose, because the guard is unreachable from the conflict markers you
+# arrived with (CodySwannGT/lisa#3061).
+.lisa/PROJECT_LEARNINGS.md merge=lisa-learnings
+
+# The overflow buffer holds captures the ledger had no budget for, until
+# the gardener drains them. Same writers, same branches, same format — so
+# it needs the same union merge, or a merge could destroy the very content
+# it exists to preserve.
+.lisa/PROJECT_LEARNINGS.overflow.md merge=lisa-learnings
+
+# Withdrawal tombstones, appended by every agent that retracts a claim it
+# circulated (CodySwannGT/lisa#3752). A sibling of the ledger above — same
+# concurrent writers on their own branches — but one JSON object per line
+# and append-only, so git's BUILT-IN union driver reconstructs concurrent
+# appends exactly. No bespoke driver, and nothing machine-local to register.
+# A default line merge here would drop a retraction, which is the one
+# failure this ledger exists to make impossible.
+.lisa/WITHDRAWN.jsonl merge=union
+
+# Short-lived operational hazards, appended by any session that declares
+# one (CodySwannGT/lisa#3681). Same append-only JSONL shape as the
+# tombstones above and the same built-in union driver — a default line
+# merge would drop a hazard, and a hazard nobody is told about is the
+# collision this ledger exists to prevent. Entries carry an expiry and
+# stop applying on their own, so the file drains without an editor.
+.lisa/HAZARDS.jsonl merge=union
+.lisa/RECURRENCES.jsonl merge=union
+
+# END: AI GUARDRAILS

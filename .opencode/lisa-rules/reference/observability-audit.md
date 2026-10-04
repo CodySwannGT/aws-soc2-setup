@@ -1,5 +1,25 @@
 # Observability Audit (load-bearing)
 
+> Demoted from the always-on eager tier by CodySwannGT/lisa#3992. The
+> section below is the former eager head, preserved verbatim; the full
+> contract follows it. Reachable on demand via [the rule index](../eager/00-rule-index.md).
+
+## Observability Audit (load-bearing)
+
+The **audit + file** arm of `lisa-monitor`. On top of its existing live-signal sweep, `monitor` audits how well the **current repo** is instrumented and files build-ready tickets for what it finds. `monitor` is **manual** (no cron) and **files only** — it never fixes; the `intake` / `tracker-build-intake` cron implements what it files.
+
+## Invariants
+
+- **Repo-scoped two ways.** Audit only the rubric dimensions in scope for the repo's detected profile (`frontend` / `backend` / `infra` — a frontend repo never evaluates backend tracing), and stamp every filed ticket `repo:<CURRENT_REPO>` as a single-repo leaf (resolve the repo via the `config-resolution` ladder; cannot resolve → report, do not file).
+- **Two finding types → build-ready leaves.** A live signal over the conservative bar → a `Bug` leaf; an in-scope MISSING instrumentation dimension (gap, e.g. "no DB/query analytics") → a `Task`/`Improvement` leaf. Always via `lisa-tracker-write` with `build_ready: true` (never a vendor write skill directly); never an Epic/container (gate S15).
+- **Conservative by default.** Only high-signal anomalies (over the documented thresholds) and `core` missing dimensions are filed. `--all-gaps` widens gap filing to `recommended` tiers; nothing lowers the anomaly bar.
+- **Idempotent.** Every ticket carries a `<!-- lisa:monitor-finding: <fingerprint> -->` sentinel; search-before-create (including closed tickets) means a re-run never duplicates a live or just-resolved finding.
+- **Capped.** At most `monitor.maxCandidates` tickets per run (default 20), highest-severity first; report filed-vs-dropped (and list the dropped) — never silently truncate.
+- **Gate-passing.** Each ticket is a real authored artifact: three-audience description, Gherkin AC, single-repo, Target Backend Environment, and a Validation Journey with a typed `[EVIDENCE: <artifact-type>: <name>]` marker (unique kebab-case name) — so `tracker-validate` (S1–S15) accepts it. A finding that cannot be made into a credible ticket is reported, not filed.
+- **Verify guard.** When `monitor` is the post-deploy step of `lisa-verify` it runs **report-only** — Verify invokes it as `lisa-monitor <env> --report-only`, so it never files there. Filing is a standalone-only action.
+
+---
+
 This rule is the single source of truth for the **audit + file** arm of the `lisa-monitor` skill. The `monitor` skill collects live signals (errors, logs, performance, health) via the stack `ops-specialist` exactly as before; this rule adds two things on top, both **repo-scoped**:
 
 1. **Audit** — score the repo against an observability-completeness rubric for its detected type, so a frontend repo is never dinged for missing backend tracing.
@@ -55,11 +75,11 @@ Collect live signals via the stack `ops-specialist` when present (Expo/Rails), e
 
 | Signal | Fileable when |
 |---|---|
-| Sentry issue | `is:unresolved` **and** `level:error|fatal` **and** events in last 24h ≥ `sentryMinEvents24h` (default 10). Skip resolved/ignored/muted and below-floor noise. |
+| Error event | Unresolved error/fatal signal **and** events in last 24h ≥ `monitor.thresholds.minEvents24h` (default 1). Skip resolved, ignored, muted, and below-floor noise. |
 | Error-rate spike | error rate ≥ `errorRateSpikeMultiplier`× (default 2×) the prior-window baseline **and** above an absolute floor (not 1-of-2 requests). |
 | Latency regression | p95 ≥ `p95LatencyMs` (default 1000ms) sustained, **or** p95 up ≥ 50% vs the prior window. |
 | CloudWatch alarm | any alarm in `ALARM` state. |
-| X-Ray fault rate | fault traces > `xrayFaultRatePct` (default 5%) of traces in the window. |
+| Fault rate | fault observations > `monitor.thresholds.faultRatePct` (default 5%) of observations in the window. |
 | Client-side (Playwright) | repeated console `error` or a 5xx network response on a smoke flow. |
 
 Everything below the bar is reported (so the human sees it) but **not** ticketed. `--all-gaps` does not lower anomaly thresholds — it only widens *gap* tiers.
@@ -73,7 +93,7 @@ Both finding types are filed through the vendor-neutral `lisa-tracker-write` shi
 - **Three-audience description** (S3): coding-assistant (technical: stack trace / Sentry link / occurrence count / the missing dimension and how to wire it), developer (where it surfaces, suspected cause/affected files, the fix skill to reach for), stakeholder (user/SLO impact).
 - **Gherkin acceptance criteria** (S4).
 - **Single repo** (S10): stamped `repo:<CURRENT_REPO>`; scope the description to this repo only.
-- **Target Backend Environment** (S8) + **Validation Journey** carrying at least one unique kebab-case `[EVIDENCE: <name>]` marker (S11/S14) — both anomaly fixes and gap wiring are runtime changes, so both need an env and a journey that proves the fix. The bracketed `[EVIDENCE: <name>]` form is what the validator scans for; a bare `EVIDENCE:` line fails S14. Prefer two markers (a success and an error/edge case).
+- **Target Backend Environment** (S8) + **Validation Journey** carrying at least one typed `[EVIDENCE: <artifact-type>: <name>]` marker (S11/S14) — both anomaly fixes and gap wiring are runtime changes, so both need an env and a journey that proves the fix. The bracketed typed form is what the validator scans for; a bare `EVIDENCE:` line or an untyped assertion label (`[EVIDENCE: alert-fixed]`) fails S14 — for observability work the natural types are `log-snippet` and `state-dump`. Prefer two markers (a success and an error/edge case).
 - **Relationship search before write** (S13) — doubles as the dedup guard (next section).
 - **No parent/Epic required.** These are build-ready standalone leaves; S7's parent requirement is waived for a `build_ready: true` leaf (the leaf carve-out in `leaf-only-lifecycle` / `tracker-validate`). Do not fabricate an Epic parent.
 - A **priority** ordered by tier and severity: `core` gap / high-event anomaly → higher; `recommended` gap → lower.
@@ -94,7 +114,11 @@ A manual re-run next week must not duplicate last week's tickets. Mirror the `re
    - Anomaly: `sha1("<source>:<stable-signature>:<CURRENT_REPO>")` (12 hex chars). `stable-signature` is the Sentry issue short-id (or culprit), the CloudWatch alarm name, or `errorType@location` — something that survives between runs, **never** the human title or occurrence count.
    - Gap: the literal `gap:<dimension>:<CURRENT_REPO>` (a dimension is missing-or-not; no hash needed).
 2. **Sentinel in the body.** Embed `<!-- lisa:monitor-finding: <fingerprint> -->` in every filed ticket.
-3. **Search before create** (this IS gate S13). Before filing, search the tracker for the fingerprint string. The search **MUST include closed/resolved tickets** (`gh issue list --search <fp> --state all` for GitHub; JQL with no status filter for JIRA; all states for Linear) — otherwise a just-closed match is invisible and the backoff below can't fire. If an **open** ticket carries the fingerprint → skip (optionally link). If a ticket carrying it was closed **within the recently-resolved backoff window** (`monitor.backoffHours`, default **24h** — matching the 24h Sentry event window; this is **not** the 2h `intake.repair.staleAfterHours`) → skip, to avoid re-filing a just-fixed regression before its signal has drained. Only file when no live or recently-resolved match exists.
+3. **Search before create** (this IS gate S13). Before filing, search the tracker for the fingerprint string. The search **MUST include closed/resolved tickets** (`gh issue list --search <fp> --state all` for GitHub; JQL with no status filter for JIRA; all states for Linear) — otherwise a just-closed match is invisible and the backoff and decline checks below can't fire. If an **open** ticket carries the fingerprint → skip (optionally link). Otherwise classify a closed match by **how** it closed:
+   - **Closed as _not planned_ — a permanent decline** (`rejection-detection` **Proposal rejection memory**). GitHub `stateReason == "not_planned"`; the config-resolved won't-do/canceled equivalent on JIRA/Linear (never a hardcoded lane string). This is a durable human "no", not a time-boxed guard: **suppress the finding regardless of age**, and re-file only with evidence that **postdates the decline** and establishes a materially changed consequence, requirement, or risk addressing the recorded reason. Seeing the same accepted limitation on a later date is insufficient. The new ticket MUST carry BOTH the machine token (`declined <date>; recurred <date> in <ref>`) and the human acknowledgment sentence (`You declined this on <date>. New evidence (<date>, <ref>) changes the consequence, requirement, or risk: <what changed and why the decline no longer applies>.`). This layers *on top of* the backoff below — a not_planned close outlives any window.
+   - **Closed as _completed_ within the recently-resolved backoff window** (`monitor.backoffHours`, default **24h** — matching the 24h Sentry event window; this is **not** the 2h `intake.repair.staleAfterHours`) → skip, to avoid re-filing a just-fixed regression before its signal has drained. A completed close **older** than the window is not a decline — a genuine recurrence is a regression and may file.
+
+   Only file when no live match or recently-resolved completed match exists, and any prior not_planned decline meets the evidence and acknowledgment requirements above.
 
 ## The cap
 

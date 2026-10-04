@@ -1,6 +1,6 @@
 ---
 name: lisa-use-the-product
-description: Shared methodology for actually USING a project's product the way its real end user would — across product types (DOM web app, HTTP/API backend, canvas game, CLI/library, IaC/CDK). Detects the product's consumer-facing interface, drives it as that consumer, gated by a per-environment mutation policy read from .lisa.config.json (so the agent never mutates production data by accident), and lensed through the project's personas/subagents when it defines them. Invoked by exploratory-qa (files defect/UX tickets) and product-walkthrough (grounds planning in the live product); rarely run standalone.
+description: "Shared methodology for actually…"
 ---
 
 # Use the Product
@@ -66,7 +66,7 @@ Look for the project's personas: `wiki/personas/**` (target-player archetypes, s
 
 Apply the interface's *read-only* actions always; the *mutate* actions only when the policy is `full`.
 
-- **DOM web app** — a real browser (Playwright MCP). Land cold on the entry page, then click / type / select / submit visible controls and attempt real tasks; sweep viewport widths. *(The caller's lens supplies the specific things to look for.)*
+- **DOM web app** — a real browser controlled interactively through any capable backend (in-app Browser/Chrome, Playwright MCP/API/ad hoc script, CDP, computer use, the opt-in Lisa-owned Kane adapter, or equivalent). Land cold on the entry page, then click / type / select / submit visible controls and attempt real tasks; sweep viewport widths. The controller is an implementation detail; a missing preferred backend is not a blocker when another can drive the same live journey. A Playwright test run alone is not this evidence. Kane is selected only via `lisa-kane-browser`, only after `lisa kane probe` succeeds, and only for an allowed non-production env whose mutation policy is `full`; use a more directly controlled backend for `read-only` journeys. *(The caller's lens supplies the specific things to look for.)*
 - **HTTP / API backend** — the consumer is a client, not a browser. Read-only: read the OpenAPI/routes and call safe `GET`s (`curl`/`httpie`). Mutate: exercise representative `POST`/`PUT`/`DELETE` flows with test data as the `identity`; check status codes, payload shapes, and error responses.
 - **Canvas game** — a real browser, but the UI is **drawn to a canvas, not the DOM**. Boot it (e.g. `bun run dev` + Playwright), drive via **keyboard/pointer into the canvas**, and read state **visually via screenshots** (not the accessibility tree). Mutation is usually local save state. Judge readability, game-feel, and input responsiveness — not DOM breakpoints.
 - **CLI / library** — the interface is the command / public API. Read-only: `--help`, read-only commands, dry-runs. Mutate: run state-changing commands with disposable inputs.

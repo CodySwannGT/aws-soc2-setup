@@ -1,6 +1,6 @@
 ---
 name: lisa-atlassian-access
-description: "Vendor-neutral access layer for Atlassian (JIRA + Confluence). Every jira-* and confluence-* skill MUST delegate through this skill rather than calling Atlassian directly. Resolves a substrate per operation, binding JIRA writes to the configured cloudId via Atlassian REST whenever token auth is available and using acli only for reads or as a guarded fallback. For non-write acli operations, acli is used when installed and switchable to a profile matching the configured site; mismatched active profiles are skipped only after switch plus re-verification fails."
+description: "Vendor-neutral access layer for…"
 allowed-tools: ["Bash", "Read", "Skill"]
 ---
 
@@ -11,6 +11,8 @@ Single chokepoint for all Atlassian operations. Routes each op to a substrate, e
 ## Invocation contract
 
 The caller passes one operation plus its arguments. Operations are listed in the dispatch table below. The skill returns either the structured operation result (JSON when the substrate provides it) or a clear error.
+
+For agent-composed JIRA or Confluence comments, apply `lisa-tracker-sync` — **Agent attribution** before posting. Preserve an existing disclosure and the exact format of machine-managed comments.
 
 ```text
 operation: read-ticket  key: PROJ-123
@@ -35,61 +37,84 @@ EMAIL=$(jq -r '.atlassian.email // empty' .lisa.config.local.json 2>/dev/null)
 [ -z "$CLOUDID" ] && { echo "Error: atlassian.cloudId not set. Run /lisa:setup:atlassian." >&2; exit 1; }
 ```
 
-Probe each tier in order; the first that's ready AND identity-matches is the substrate for this operation. Identity-match is verified before any operation; substrates authenticated as a different Atlassian account are switched to the configured profile when one exists, then skipped only if the switch fails or re-verification still mismatches.
+Probe each tier in order; the first that's ready AND identity-matches is the substrate for this operation. The ordering is the shared `credential-substrate-precedence` contract — the configured-provider token substrate leads for **reads and writes alike**, with acli and the MCP as identity-matched fallbacks — not an Atlassian-local choice. Identity-match is verified before any operation; substrates authenticated as a different Atlassian account are switched to the configured profile when one exists, then skipped only if the switch fails or re-verification still mismatches.
 
 ```bash
 substrate=""
 
-# Tier 1: acli for reads and non-write operations only.
-#
-# Do not choose acli for JIRA writes when curl/token auth is available. acli stores
-# one machine-global active account and workitem writes cannot pin a cloudId per
-# invocation, so switch-then-write is a TOCTOU risk in multi-account or concurrent
-# sessions. Write operations prefer the cloudId-scoped REST URL below.
-if [ "$OP_KIND" != "jira-write" ] && command -v acli >/dev/null 2>&1 && acli auth status >/dev/null 2>&1; then
-  current_site=$(acli auth status 2>/dev/null | awk '/^  Site:/{print $2}')
-  if [ "$current_site" != "$SITE" ]; then
-    # acli installed but pointing at a different site. Try switching profiles.
-    acli auth switch --site "$SITE" ${EMAIL:+--email "$EMAIL"} >/dev/null 2>&1 || true
-    current_site=$(acli auth status 2>/dev/null | awk '/^  Site:/{print $2}')
-  fi
-  if [ "$current_site" = "$SITE" ]; then
-    substrate="acli"
-  fi
-fi
-
-# Tier 2: Atlassian MCP (if acli not ready OR the operation isn't acli-covered)
-# $OP_REQUIRES is a conceptual variable set by the dispatch table to "non-acli" for
-# operations that have no acli adapter (e.g. read-page-descendants). It is not a real
-# shell variable initialized here — the condition is illustrative pseudo-code.
-if [ -z "$substrate" ] || [ "$OP_REQUIRES" = "non-acli" ]; then
-  # Probe via mcp__plugin_atlassian_atlassian__getAccessibleAtlassianResources.
-  # (Pseudo-code; actual call is the MCP tool invocation, not a bash command.)
-  # If the MCP returns a list and $CLOUDID is in it, MCP is identity-matched.
-  # If the MCP is unauthenticated or $CLOUDID is NOT in the list, MCP is skipped.
-  if mcp_atlassian_authenticated_and_matches_cloudid "$CLOUDID"; then
-    : ${substrate:=mcp}
-    # Mark MCP as available even if acli already won tier 1 — used for ops acli can't do.
-    mcp_available=true
-  fi
-fi
-
-# Tier 3: curl + API token (headless / multi-account / scoped-token path)
+# Tier 1: curl + API token — the configured-provider substrate, resolved through
+# lisa-secrets-access. Leads for every operation because it is per-invocation-bound:
+# the cloudId-scoped gateway URL and the token's own account carry the tenant inside
+# the request, so no ambient machine-global state can redirect it. acli (one global
+# active account) and the MCP (browser OAuth session) are ambient-bound and therefore
+# TOCTOU-exposed — see credential-substrate-precedence, "tenant safety".
 read_atlassian_token() {
   local email="$1"
   [ -n "$ATLASSIAN_API_TOKEN" ] && { echo "$ATLASSIAN_API_TOKEN"; return; }
   local slug=$(echo "$email" | tr '[:upper:]@.' '[:lower:]__')
   local varname="ATLASSIAN_API_TOKEN_${slug}"
   [ -n "${!varname}" ] && { echo "${!varname}"; return; }
+  # Preferred path: the single secrets chokepoint. It owns the one-store rule
+  # and the surface ladder, so anything it can answer must not be read out of an
+  # OS keychain here — a second reader is how the same credential ends up living
+  # in two places and drifting.
+  #
+  # Ordered across trusted machine-managed substrates, ending at the installed
+  # package. Checkout-local paths are deliberately absent: a familiar generated
+  # destination is still repository-controlled executable code. The plugin
+  # rungs are the floor: `resolve-secret.mjs` ships beside this skill, so a rung
+  # pointing at it is reachable from anywhere the plugin itself is installed.
+  # Without one, a consumer repository that vendors none of the leading paths
+  # never reaches a resolver at all — the ladder exits without having asked
+  # anything, which is what pushed agents into improvising their own credential
+  # lookups. This LADDER is identical in every skill that resolves a credential
+  # and `credential-resolver-ladder` fails if any copy diverges. Only what
+  # happens AFTER the ladder may differ between them.
+  # Executable resolvers are a code boundary. Checkout-local copies are mutable
+  # repository content, so use only machine-managed plugin/package locations.
+  local candidates=()
+  if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+    candidates+=("$CLAUDE_PLUGIN_ROOT/skills/lisa-secrets-access/scripts/resolve-secret.mjs")
+  fi
+  if [ -n "${PLUGIN_ROOT:-}" ]; then
+    candidates+=("$PLUGIN_ROOT/skills/lisa-secrets-access/scripts/resolve-secret.mjs")
+  fi
+  # Last rung deliberately needs no environment variable: an agent that was
+  # never handed a plugin root still has the installed package to fall back on.
+  candidates+=(node_modules/@codyswann/lisa/plugins/lisa/skills/lisa-secrets-access/scripts/resolve-secret.mjs)
+
+  local resolver
+  local tried=()
+  for resolver in "${candidates[@]}"; do
+    tried+=("$resolver")
+    if [ -f "$resolver" ]; then
+      local via_lisa
+      via_lisa=$(node "$resolver" get ATLASSIAN_API_TOKEN 2>/dev/null) \
+        && [ -n "$via_lisa" ] && { echo "$via_lisa"; return; }
+      # Empty/error means this substrate had no answer; try the next trusted one.
+    fi
+  done
+  # Legacy fallback: the OS keychain written by the guided /lisa:setup:atlassian
+  # flow, for projects that have not adopted a credentials provider. Reached only
+  # when the chokepoint is absent or has no entry.
+  #
+  # This rung is REMOVED ON 2026-11-01 — a dated migration ramp, not a standing
+  # exemption (see credential-substrate-precedence, "Legacy OS-keychain fallback
+  # — removal date"). A keychain entry is machine-local ambient state no headless
+  # surface can reach, so a project resting on it has no working tier 1 in cron,
+  # CI, or a cloud session. Re-run /lisa:setup:atlassian before that date to
+  # store ATLASSIAN_API_TOKEN through the chokepoint instead.
+  local from_keychain=""
   case "$(uname -s)" in
-    Darwin)  security find-generic-password -s lisa-atlassian -a "$email" -w 2>/dev/null ;;
-    Linux)   command -v secret-tool >/dev/null && secret-tool lookup service lisa-atlassian account "$email" 2>/dev/null ;;
+    Darwin)  from_keychain=$(security find-generic-password -s lisa-atlassian -a "$email" -w 2>/dev/null) ;;
+    Linux)   command -v secret-tool >/dev/null && \
+             from_keychain=$(secret-tool lookup service lisa-atlassian account "$email" 2>/dev/null) ;;
     MINGW*|MSYS*|CYGWIN*)
       # `cmdkey /generic ... /pass:` stores the secret in Windows Credential Manager, but
       # `cmdkey /list` never prints stored passwords (by design). Read the CredentialBlob
       # back via the Win32 CredRead API through PowerShell; pass the target name via an env
       # var to dodge nested quoting, and strip the CRLF powershell.exe appends.
-      LISA_CRED_TARGET="lisa-atlassian-${email}" powershell.exe -NoProfile -NonInteractive -Command '
+      from_keychain=$(LISA_CRED_TARGET="lisa-atlassian-${email}" powershell.exe -NoProfile -NonInteractive -Command '
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -115,17 +140,65 @@ public static class LisaCred {
   }
 }
 "@
-[LisaCred]::Read($env:LISA_CRED_TARGET)' 2>/dev/null | tr -d '\r' ;;
+[LisaCred]::Read($env:LISA_CRED_TARGET)' 2>/dev/null | tr -d '\r') ;;
   esac
+  [ -n "$from_keychain" ] && { echo "$from_keychain"; return; }
+
+  # Name every path. A bare `return 1` sends the next reader hunting for a
+  # resolver they cannot see the absence of; the enumeration turns that into a
+  # seconds-long diagnosis. Paths and store coordinates only — never any
+  # resolved value, on any path.
+  echo "Error: could not resolve ATLASSIAN_API_TOKEN through lisa-secrets-access or the legacy keychain." >&2
+  echo "Tried, in order (relative paths are from $PWD):" >&2
+  printf '  %s\n' "${tried[@]}" >&2
+  echo "  <OS keychain> service=lisa-atlassian account=<configured>" >&2
+  return 1
 }
 TOKEN=$(read_atlassian_token "$EMAIL")
-[ -n "$TOKEN" ] && curl_available=true && {
-  if [ "$OP_KIND" = "jira-write" ]; then
+if [ -n "$TOKEN" ]; then
+  # Identity-match before use: /rest/api/3/myself must report the configured account
+  # (Step 2). A present-but-wrong token fails the gate loudly instead of quietly
+  # deferring to an acli profile or MCP session authenticated somewhere else — that
+  # silent success is the bug class the precedence contract exists to surface.
+  if atlassian_token_matches_config "$TOKEN" "$EMAIL" "$CLOUDID"; then
+    curl_available=true
     substrate="curl"
   else
-    : ${substrate:=curl}
+    echo "Warning: ATLASSIAN_API_TOKEN does not match the configured account/site. Skipping curl tier." >&2
   fi
-}
+fi
+
+# Tier 2: acli — identity-matched fallback. Used when no token is available, or for
+# operations with no curl adapter. Never the primary path for JIRA writes when token
+# auth is available: acli stores one machine-global active account and workitem writes
+# cannot pin a cloudId per invocation, so switch-then-write is a TOCTOU risk in
+# multi-account or concurrent sessions. When a write does land here it is the *guarded*
+# fallback documented in the dispatch table (assert, write, re-read, assert, roll back).
+if command -v acli >/dev/null 2>&1 && acli auth status >/dev/null 2>&1; then
+  current_site=$(acli auth status 2>/dev/null | awk '/^  Site:/{print $2}')
+  if [ "$current_site" != "$SITE" ]; then
+    # acli installed but pointing at a different site. Try switching profiles.
+    acli auth switch --site "$SITE" ${EMAIL:+--email "$EMAIL"} >/dev/null 2>&1 || true
+    current_site=$(acli auth status 2>/dev/null | awk '/^  Site:/{print $2}')
+  fi
+  if [ "$current_site" = "$SITE" ]; then
+    acli_available=true
+    # Mark acli available even if curl already won tier 1 — used for ops curl can't do.
+    : ${substrate:=acli}
+  fi
+fi
+
+# Tier 3: Atlassian MCP — first-class interactive fallback, for when neither tier above
+# is available or covers the operation (e.g. an op with no curl and no acli adapter).
+# Probe via mcp__plugin_atlassian_atlassian__getAccessibleAtlassianResources.
+# (Pseudo-code; actual call is the MCP tool invocation, not a bash command.)
+# If the MCP returns a list and $CLOUDID is in it, MCP is identity-matched.
+# If the MCP is unauthenticated or $CLOUDID is NOT in the list, MCP is skipped.
+if mcp_atlassian_authenticated_and_matches_cloudid "$CLOUDID"; then
+  : ${substrate:=mcp}
+  # Mark MCP as available even if an earlier tier won — used for ops they can't do.
+  mcp_available=true
+fi
 
 # Fail loudly with actionable remediation if nothing works.
 if [ -z "$substrate" ]; then
@@ -137,15 +210,25 @@ if [ -z "$substrate" ]; then
   cat >&2 <<EOF
 Error: no Atlassian access substrate available for site $SITE.
 
-Attempted:
+Attempted (in credential-substrate-precedence order):
+  curl   — no ATLASSIAN_API_TOKEN found for $EMAIL (env, slug-suffixed env, or keychain) OR the token does not match the configured account/site
   acli   — $(command -v acli >/dev/null && echo "installed but identity mismatch or unauthenticated" || echo "not installed")
   MCP    — $([ "$plugin_enabled_global" = "true" ] || [ "$plugin_enabled_project" = "true" ] || [ "$plugin_enabled_local" = "true" ] && echo "plugin enabled but not authenticated or cloudId $CLOUDID not in accessible resources" || echo "plugin not enabled in any settings.json scope")
-  curl   — no ATLASSIAN_API_TOKEN found for $EMAIL (env, slug-suffixed env, or keychain)
 
-Remediation paths (pick one):
+Remediation paths (the first is the contract's primary path):
 
-1. Install the Atlassian MCP plugin (local scope — per-developer, gitignored).
-   This is the simplest path for single-account developers.
+1. Provision an API token — works headless, in CI, in subagents, and in
+   multi-account setups, and is the substrate this project resolves first.
+
+     Run /lisa:setup:atlassian — guided flow with clipboard-piped keychain store.
+
+2. Install acli and authenticate (identity-matched fallback for multi-account developers).
+
+     brew tap atlassian/homebrew-acli && brew install acli
+     acli auth login   # OAuth as the account matching $EMAIL
+
+3. Install the Atlassian MCP plugin (local scope — per-developer, gitignored).
+   The supported fallback when no credentials provider is configured.
 
    Run in your terminal:
 
@@ -157,25 +240,16 @@ Remediation paths (pick one):
    Then restart Claude Code (or run /restart-mcp) to load the plugin, and
    invoke 'mcp__plugin_atlassian_atlassian__authenticate' to complete OAuth.
 
-2. Install acli and authenticate (best for multi-account developers).
-
-     brew tap atlassian/homebrew-acli && brew install acli
-     acli auth login   # OAuth as the account matching $EMAIL
-
-3. Provision an API token (headless / CI / scoped-token environments).
-
-     Run /lisa:setup:atlassian — guided flow with clipboard-piped keychain store.
-
 EOF
   exit 1
 fi
 ```
 
-Operation dispatch then uses `$substrate` for the primary route. If the operation has no `acli` adapter and `$substrate=acli`, fall through to `$mcp_available` then `$curl_available` for the actual call. The fall-through stops at the first available tier that can perform the operation.
+Operation dispatch then uses `$substrate` for the primary route. If the operation has no adapter for the selected substrate, fall through in contract order — `$curl_available`, then `$acli_available`, then `$mcp_available` — skipping the tier already tried. The fall-through stops at the first available tier that can perform the operation. A tier that failed identity-match is never in the fall-through set.
 
 ### Step 2 — Connection-match check
 
-The active connection MUST point at the cloudId/site declared in `.lisa.config.json`. Step 1's substrate selection already tries to switch mismatched acli profiles and verifies the result before selection. This step repeats the assertion before any operation runs — defensive in case the substrate state changed since selection.
+The active connection MUST point at the cloudId/site declared in `.lisa.config.json`. Identity-match is mandatory on **every** substrate, tier 1 included (`credential-substrate-precedence`); the "curl mode check" below *is* the tier-1 gate referenced as `atlassian_token_matches_config` in Step 1. Step 1's substrate selection already validates the token account and tries to switch mismatched acli profiles before selection. This step repeats the assertion before any operation runs — defensive in case the substrate state changed since selection.
 
 Read configured site:
 
@@ -213,7 +287,7 @@ if [ -n "$site" ] && [ "$current_site" != "$site" ]; then
 fi
 
 if [ -n "$email" ] && [ -n "$current_email" ] && [ "$current_email" != "$email" ]; then
-  echo "Error: acli active account is '$current_email', but .lisa.config.json requires '$email'. Run /lisa:setup:atlassian to add or repair the matching profile." >&2
+  echo "Error: acli active account does not match the configured Atlassian account. Run /lisa:setup:atlassian to add or repair the matching profile." >&2
   exit 1
 fi
 ```
@@ -235,7 +309,7 @@ if [ -z "$me_email" ]; then
   exit 1
 fi
 if [ "$me_email" != "$email" ]; then
-  echo "Error: ATLASSIAN_API_TOKEN belongs to '$me_email', but .lisa.config.local.json declares '$email'. Multi-account misconfiguration." >&2
+  echo "Error: ATLASSIAN_API_TOKEN identity does not match the configured Atlassian account. Multi-account misconfiguration; re-run /lisa:setup:atlassian." >&2
   exit 1
 fi
 ```
@@ -274,15 +348,15 @@ Rules:
 
 ### Step 3 — Operation dispatch
 
-Substrate column meanings:
+Substrate column meanings (ordering per `credential-substrate-precedence`):
 
-- **`acli`**: routes through `acli`. Preferred when available and identity-matched.
-- **`MCP`**: routes through the Atlassian MCP. Preferred when acli can't do the op and the MCP is identity-matched (cloudId in `getAccessibleAtlassianResources`).
-- **`curl`**: routes through curl + Basic auth + `ATLASSIAN_API_TOKEN`. Used when neither acli nor MCP is available.
-- Multiple cells filled means tier ordering applies — try acli, then MCP, then curl, taking the first that has an adapter for the op AND is identity-matched.
+- **`curl`**: routes through curl + Basic auth + `ATLASSIAN_API_TOKEN` — the configured-provider substrate. Preferred for every operation, read or write, whenever the token is present and identity-matched.
+- **`acli`**: routes through `acli`. Identity-matched fallback — used when no token is available or the op has no curl adapter. For JIRA writes it is the *guarded* fallback (see the tenant-safety rule below).
+- **`MCP`**: routes through the Atlassian MCP. First-class fallback for ops neither tier above covers, when identity-matched (cloudId in `getAccessibleAtlassianResources`).
+- Multiple cells filled means tier ordering applies — try curl, then acli, then MCP, taking the first that has an adapter for the op AND is identity-matched.
 - One cell means only that substrate can perform the op.
 
-`<SITE>` = `.atlassian.site` (e.g. `propswap.atlassian.net`). `<CLOUDID>` = `.atlassian.cloudId`. `<AUTH>` = `Basic $(printf '%s:%s' "$email" "$ATLASSIAN_API_TOKEN" | base64)`. JIRA curl writes use the cloudId-bound Atlassian gateway `https://api.atlassian.com/ex/jira/<CLOUDID>/rest/api/3/...`; JIRA curl reads may use either that gateway or `https://<SITE>/rest/api/3/...` after the token account check. Confluence uses `/wiki/rest/api/...` (v1) or `/api/v2/...` (v2).
+`<SITE>` = `.atlassian.site` (e.g. `acme.atlassian.net`). `<CLOUDID>` = `.atlassian.cloudId`. `<AUTH>` = `Basic $(printf '%s:%s' "$email" "$ATLASSIAN_API_TOKEN" | base64)`. JIRA curl writes use the cloudId-bound Atlassian gateway `https://api.atlassian.com/ex/jira/<CLOUDID>/rest/api/3/...`; JIRA curl reads may use either that gateway or `https://<SITE>/rest/api/3/...` after the token account check. Confluence uses `/wiki/rest/api/...` (v1) or `/api/v2/...` (v2).
 
 | Operation | acli adapter | MCP adapter | curl adapter |
 |---|---|---|---|
@@ -291,7 +365,9 @@ Substrate column meanings:
 | `write-ticket payload:<P>` (create) | guarded fallback only: `acli jira workitem create --from-json <P>` + response tenant assertion | `mcp__plugin_atlassian_atlassian__createJiraIssue` | `POST https://api.atlassian.com/ex/jira/<CLOUDID>/rest/api/3/issue` body=`<P>` |
 | `write-ticket payload:<P>` (edit) | guarded fallback only: `acli jira workitem edit <K> --from-json <P>` + response tenant assertion | `mcp__plugin_atlassian_atlassian__editJiraIssue` | `PUT https://api.atlassian.com/ex/jira/<CLOUDID>/rest/api/3/issue/<K>` body=`<P>` |
 | `transition key:<K> to:<S>` | guarded fallback only: `acli jira workitem transition --key <K> --status "<S>" --yes` + post-read tenant assertion | `mcp__plugin_atlassian_atlassian__transitionJiraIssue` | resolve transition id then `POST https://api.atlassian.com/ex/jira/<CLOUDID>/rest/api/3/issue/<K>/transitions` |
-| `transitions key:<K>` | (not exposed) | `mcp__plugin_atlassian_atlassian__getTransitionsForJiraIssue` | `GET https://<SITE>/rest/api/3/issue/<K>/transitions` |
+| `transitions key:<K>` — **false friend:** available transitions from current status, **NOT** past history; for history use `changelog` | (not exposed) | `mcp__plugin_atlassian_atlassian__getTransitionsForJiraIssue` | `GET https://<SITE>/rest/api/3/issue/<K>/transitions` |
+| `changelog key:<K>` (read; ordered past status transitions) | (not exposed) | (not exposed) | `GET https://<SITE>/rest/api/3/issue/<K>?expand=changelog` |
+| `comments key:<K>` (read; all comments, paginated) — **not** `comment`, which is the write | (not exposed) | `mcp__plugin_atlassian_atlassian__getJiraIssue` (comment field only; may be capped — page via curl when `total` exceeds what it returned) | `GET https://<SITE>/rest/api/3/issue/<K>/comment?startAt=<n>&maxResults=100&orderBy=created` |
 | `comment key:<K> body:<B>` | guarded fallback only: `acli jira workitem comment add --key <K> --body "<B>"` + post-read tenant assertion | `mcp__plugin_atlassian_atlassian__addCommentToJiraIssue` | `POST https://api.atlassian.com/ex/jira/<CLOUDID>/rest/api/3/issue/<K>/comment` |
 | `link from:<K> to:<K2> type:<T>` | guarded fallback only: `acli jira workitem link create --in <K> --out <K2> --type "<T>" --yes` + direction and tenant assertion (see direction note) | `mcp__plugin_atlassian_atlassian__createJiraIssueLink` | `POST https://api.atlassian.com/ex/jira/<CLOUDID>/rest/api/3/issueLink` |
 | `remote-links key:<K>` | (not exposed) | `mcp__plugin_atlassian_atlassian__getJiraIssueRemoteIssueLinks` | `GET https://<SITE>/rest/api/3/issue/<K>/remotelink` |
@@ -316,7 +392,7 @@ Substrate column meanings:
 
 **acli flag note:** acli's `--output` flag does not exist; the correct flag is `--json`. List commands require `--paginate` or `--limit` (no implicit fetch-all). `acli jira workitem view` defaults to a restricted field set (`key,issuetype,summary,status,assignee,description`), so `read-ticket` MUST pass `--fields '*all'` or an explicit equivalent that includes every downstream dependency: parent, subtasks, issue links, components, labels, priority, status, issue type, summary, description, fix versions, affected versions, attachments, comments, estimates, sprint/story-point fields, and project-required custom fields. Never rely on the default view fields; they hide parent/components/labels and corrupt leaf-only, relationship-search, build-ready, and required-custom-field gates. Several documented adapters are nominal — verify against `acli <subcmd> --help` before relying on them. When acli's adapter is broken or missing for a specific op, fall through to MCP (if identity-matched) then curl per the tier ordering.
 
-**JIRA write tenant-safety rule:** create, edit, transition, comment, and link are write operations. They MUST prefer the curl adapter whenever token auth is available because the URL includes `<CLOUDID>` and cannot be redirected by the user-global acli active account. If the flow must fall back to acli for a write, it is a guarded fallback, not the normal path:
+**JIRA write tenant-safety rule** — the Atlassian instance of the shared guarded-fallback protocol in `credential-substrate-precedence` (which states the general rule: prefer the per-invocation-bound substrate over the ambient-bound one, for reads and writes alike; the rationale is not restated here). Create, edit, transition, comment, and link are write operations. They MUST use the curl adapter whenever token auth is available because the URL includes `<CLOUDID>` and cannot be redirected by the user-global acli active account. If the flow must fall back to acli for a write, it is a guarded fallback, not the normal path:
 
 1. Switch and assert the active `acli auth status` site/email matches config immediately before the write.
 2. Execute the write.
@@ -338,6 +414,27 @@ Operations not in this table are unsupported — add an adapter row before using
 - `write-page` payload: supports a label-only mutation form — `{ "id": "<I>", "labels": { "add": [...], "remove": [...] } }` — so callers transitioning PRD lifecycle labels do not need to resend the page body. Full create/update payloads also accepted.
 - `comment-page` `kind: inline` requires `anchor` (the highlighted text the comment attaches to). `kind: footer` ignores `anchor`.
 
+### `changelog` — transition history (read-only)
+
+`changelog key:<K>` returns the ordered past status transitions of a JIRA issue — the raw material for rejection detection (an issue that reached `review`/`done`-ward and is now back in `ready`). It is distinct from `transitions`, which is a false friend: `transitions` lists the *available* next transitions from the current status, never past ones. `read-ticket` uses `fields=*all`, which does **not** include the changelog — the expansion must be requested explicitly with `?expand=changelog`.
+
+- **Substrate.** The only substrate that exposes the changelog is JIRA REST via the `?expand=changelog` query parameter (a read, so the `<SITE>` gateway is allowed after the token account check). Neither `acli jira workitem view` (a field-projection tool; the changelog is an `expand`, not a field) nor the Atlassian MCP surfaces a changelog expansion, so both are marked `(not exposed)` — do not invent a separate transport, and do not try to reconstruct history from `transitions`.
+- **Shape.** Walk `changelog.histories[].items[]` and keep entries where `field == "status"`; for each emit `{ from, to, when, author }` — `items[].fromString` → `items[].toString`, `histories[].created` (ISO timestamp), `histories[].author.displayName`/`accountId`. Preserve JIRA's oldest→newest ordering.
+- **Empty is valid.** An issue that never transitioned returns an **empty** history — an empty history is a valid result, not an error. Callers treat empty as "never left its initial status".
+- **Pagination / truncation.** The issue-resource changelog (`?expand=changelog`) truncates busy issues (`changelog.maxResults`/`total`/`startAt`). When `total` exceeds what the issue resource returned, page the dedicated endpoint `GET https://<SITE>/rest/api/3/issue/<K>/changelog?startAt=<n>` until `startAt + maxResults >= total`, preserving order across pages. A silently truncated history is a correctness bug for detection.
+- **Graceful degrade — never block the build.** A failed changelog fetch (network, auth, missing substrate) returns the substrate contract's `Error:` result. Callers MUST treat that as **unknown** history and proceed — a history read failure never blocks the build.
+
+### `comments` — every comment on one issue
+
+`comments key:<K>` returns every comment on a JIRA issue, oldest first. `read-ticket` embeds only the first page of comments in the issue resource (`fields.comment` carries its own `startAt`/`maxResults`/`total`), so a busy ticket's later comments — often the decisions and constraints — are missing from it.
+
+- **Substrate.** JIRA REST `GET https://<SITE>/rest/api/3/issue/<K>/comment?startAt=<n>&maxResults=100&orderBy=created` (a read, so the `<SITE>` gateway is allowed after the token account check). acli exposes no paginated comment list; the MCP `getJiraIssue` comment field is used only when no token is available and is subject to the same first-page cap.
+- **Shape.** For each entry in `comments[]` emit `{ id, author, created, body }` — `author.displayName`/`accountId`, `created` (ISO timestamp), and `body` converted from ADF to plain text with headings, lists, code, and links preserved.
+- **Pagination.** Start at `startAt=0` and request the next page until `startAt + maxResults >= total`, preserving order across pages. Never stop at the first page.
+- **Empty is valid.** An issue with no comments returns `total: 0`; that is a result, not an error.
+- **Completeness fields.** Every result carries `comments_complete`, `comments_fetched`, and `comments_total`; `comments_complete: true` only when `comments_fetched == comments_total`. When only the MCP substrate is available and it cannot page past its first batch, return what it gave with `comments_complete: false` and the fetched-versus-total counts — never present a capped set as the whole.
+- **Graceful degrade.** A failed page (network, auth, missing substrate) returns the substrate contract's `Error:` result for that page. Callers record the issue's comments as **incomplete** — naming how many of `total` were read — so a partial set is never silently truncated into looking complete.
+
 ### Step 4 — Return result
 
 Emit either:
@@ -350,12 +447,23 @@ Do not paraphrase substrate output beyond JSON normalization.
 ## Invariants
 
 - Caller skills never invoke `acli` or `curl` against Atlassian directly. They only invoke this skill.
+- Tier order is the shared `credential-substrate-precedence` contract — token curl first (reads **and** writes), then acli, then the Atlassian MCP. Do not restate or locally override the ordering here.
+- acli and the Atlassian MCP remain first-class **fallbacks**, not removed tiers: every adapter stays in the dispatch table, and a project with no credentials provider is fully functional on them.
 - Substrate is decided once per skill invocation and never switches mid-operation.
-- Connection match is mandatory. Operations that bypass it (because "the user obviously meant the configured site") are forbidden.
+- Connection match is mandatory on every tier, including the token tier. Operations that bypass it (because "the user obviously meant the configured site") are forbidden. A present-but-wrong token fails the gate rather than deferring to another substrate.
 - Profile mutations (`acli auth switch`) are allowed when acli is the active substrate. The curl substrate never mutates the token — if `ATLASSIAN_API_TOKEN` doesn't match the configured account, fail loud rather than silently substituting.
 - JIRA writes are cloudId-bound by default. `acli` write adapters are fallback-only and must perform post-write tenant assertions plus safe rollback on mismatch.
 - `.lisa.config.local.json` overrides `.lisa.config.json` per-key — the same precedence rule as every other consumer of project config.
 
 ## Headless behavior
 
-In a headless / non-interactive context (no TTY, `CI=true`, or `-p` mode), the MCP tier is unavailable (its OAuth flow needs a browser). The substrate ladder collapses to: acli (if pre-authenticated, e.g., a CI image baked with a service-account token) → curl + `ATLASSIAN_API_TOKEN`. Never block on interactive prompts. If both fail readiness checks, exit non-zero with a deterministic error.
+In a headless / non-interactive context, the MCP tier is unavailable (its OAuth flow needs a browser). The ladder collapses to: curl + `ATLASSIAN_API_TOKEN` → acli (if pre-authenticated, e.g., a CI image baked with a service-account token). Because curl is already tier 1 interactively, headless and interactive sessions take the **same primary path** — that is the "headless parity" arm of `credential-substrate-precedence`, and it is why a credential problem reproduces on a laptop instead of only in cron. Never block on interactive prompts. If both fail readiness checks, exit non-zero with a deterministic error.
+
+Treat all four of these as headless:
+
+- no TTY
+- `CI=true`
+- `-p` mode
+- **a subagent / teammate session** — measured (#2148): a subagent sees only the OAuth bootstrap stubs (`…__authenticate`, `…__complete_authentication`), never the data tools, and a direct call returns `No such tool available` rather than an auth error. The request never leaves the harness. This is not a general MCP block — other MCP servers work fine from a subagent — it is specific to servers whose OAuth completed in the lead. Crucially **acli works normally in a subagent**, so the ladder already has a working tier; it just has to skip MCP to reach it.
+
+Detecting the subagent case: Lisa's Claude hooks already mark it — `SubagentStart` writes `"${STATE_DIR}/${SESSION_ID}.subagent"`, consumed by `enforce-verification-gate.sh` and `enforce-team-first.sh`. Where that flag is unavailable, probing the MCP tier and finding only `authenticate`-shaped tools is the same signal: treat it as unavailable and fall through rather than attempting a call that cannot succeed.

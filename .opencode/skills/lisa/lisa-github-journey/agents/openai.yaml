@@ -1,4 +1,4 @@
 display_name: "Github Journey"
-short_description: "Parse a GitHub Issue's Validation Journey section, execute the verification steps using appropriate tools (curl, test commands, database…"
+short_description: "Parse a GitHub Issue's…"
 default_prompt:
-  - "Use $lisa-github-journey: Parse a GitHub Issue's Validation Journey section, execute the verification steps using appropriate tools (curl, test commands, database…."
+  - "Use $lisa-github-journey: Parse a GitHub Issue's…."

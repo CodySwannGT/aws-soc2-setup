@@ -1,11 +1,11 @@
 ---
 name: lisa-setup
-description: "Scaffold, repair, verify, or upgrade the project's LLM Wiki from its config. Asks the wiki's purpose and README mode, renders the contract snapshot, scaffolds the canonical folders, and seeds the staff roster. Idempotent and non-destructive."
+description: "Scaffold, repair, verify, or…"
 ---
 ## Lisa Command Compatibility
 
 - Original Claude command: `/lisa:setup`
-- OpenCode invocation: `$lisa-setup` or a plain-English request that matches this skill.
+- Codex invocation: `$lisa-setup` or a plain-English request that matches this skill.
 - Treat the user's surrounding request as the command arguments.
 - Claude argument hint: `[--upgrade] [--with-ci]`
 

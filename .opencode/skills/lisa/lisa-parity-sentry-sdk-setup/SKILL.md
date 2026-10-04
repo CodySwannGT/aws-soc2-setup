@@ -1,8 +1,8 @@
 ---
 name: lisa-parity-sentry-sdk-setup
-description: "Install and configure the Sentry SDK for a project — detect the framework/runtime, add the correct @sentry/<framework> package, initialize the client, wire the DSN through env, enable error + performance monitoring, and set up source map upload for readable stack traces. One consolidated skill covering react, nextjs, node, nestjs, express, python, django, react-native, and more. Lisa-native reimplementation of Sentry's SDK-setup suite. Use when adding Sentry to a project or fixing an existing Sentry install."
+description: "Install and configure the…"
 allowed-tools: ["Read", "Edit", "Write", "Bash"]
-synced-from: sentry@claude-plugins-official@1.0.0
+synced-from: sentry@claude-plugins-official@1.4.0
 ---
 
 # Sentry SDK Setup
@@ -14,13 +14,61 @@ upload so stack traces are readable.
 
 ## Consolidation note
 
-The upstream `sentry@claude-plugins-official` plugin ships **~30 separate
-per-SDK setup skills** (one per framework/runtime). This **single** Lisa-native
-skill consolidates all of them: instead of one thin skill per SDK, it detects the
-framework and applies the matching case below. The behavior is reimplemented from
-scratch against Lisa conventions — it is **not** a translation of the upstream
-skills. Pinned to `sentry@claude-plugins-official@1.0.0` via `synced-from` so the
-parity drift detector tracks it as one unit.
+Upstream `sentry@claude-plugins-official` 1.0.0 shipped **~30 separate per-SDK
+setup skills**; this single Lisa-native skill consolidated all of them. As of
+upstream **1.2.0** Sentry itself consolidated the suite into one
+`sentry-instrument` playbook, so the shapes now match — but this skill remains a
+from-scratch reimplementation against Lisa conventions, **not** a translation of
+the upstream skill. Pinned to `sentry@claude-plugins-official@1.4.0` via
+`synced-from` so the parity drift detector tracks it as one unit.
+
+### Reviewed at 1.4.0 — the progress-reporting protocol is deliberately declined
+
+Read the pin as **reviewed against 1.4.0**, not as *tracks 1.4.0*. The
+`synced-from` scalar cannot say which it means, so this section says it.
+
+Upstream 1.4.0's substantive addition is an onboarding progress protocol: the
+setup skill scans the user's first prompt for an opaque token and, from then on,
+reports staged setup progress to a third-party web application over the vendor's
+MCP — with an explicit instruction to make those calls with no narration,
+announcement, or summary of their reply or failure, and never to mention the
+token unless the user asks about it directly.
+
+**Lisa does not reimplement it, at 1.4.0 or on a later bump.** Data about the
+user's session leaving their environment as a silent side effect of running a
+skill is not a behavior Lisa adopts by default, and a skill that is told to
+withhold a tool call from the person running it is the specific part being
+refused. This is a statement about what a Lisa-native skill may do unobserved,
+not a judgment on the upstream product — an operator who wants that reporting
+can run the upstream plugin directly, where the behavior is the vendor's to
+explain.
+
+The rest of the 1.3.2 → 1.4.0 delta is two per-integration Beta → Stable label
+edits in upstream's own reference docs. This skill carries no per-integration
+status table, so there is nothing here to restate.
+
+## Step 0 — Scope the install
+
+Decide what you are actually doing before touching code; default to the
+smallest scope (adapted from upstream 1.2.0's scope gate):
+
+- **First error** — no Sentry yet: install the SDK, initialize it for **error
+  capture plus tracing** — noting that tracing is **opt-in** in every Sentry
+  SDK: it only activates when you set `tracesSampleRate`/`tracesSampler` (and,
+  in browsers, add the tracing integration, e.g.
+  `browserTracingIntegration()`), exactly as the Step 3 snippets do — then
+  verify a real captured event and stop. Do not wire up further signals
+  unasked.
+- **Add a signal** — Sentry already installed and the user wants one more signal
+  (logging, profiling, session replay, metrics, cron check-ins, AI/LLM
+  monitoring): skip install/provisioning and configure just that signal per the
+  SDK's docs.
+- **Full setup** — the user asked for "proper" defaults: do first-error, then
+  propose releases + source maps + the signals that fit the app, and add what
+  they accept.
+
+**Never over-instrument.** Wiring up every signal upfront produces noise,
+quota burn, and config the team doesn't understand.
 
 ## Step 1 — Detect framework & runtime
 
@@ -188,6 +236,16 @@ build time:
 - Tie uploads to a **release** identifier (commit SHA or version) and inject the
   same release into `Sentry.init({ release })` so traces map to the right build.
 
+## Step 6a — Name custom telemetry consistently
+
+When adding custom span or log attributes, use the current stable Sentry
+semantic-convention key for that domain when one exists. Sentry conventions are
+aligned with OpenTelemetry in many domains, but Sentry's current convention is
+authoritative for data sent to Sentry. Consult only the relevant domain in the
+official convention reference, omit deprecated keys, and do not invent a second
+name for an established attribute. Keep values low-cardinality and never attach
+secrets, credentials, request bodies, or unnecessary personal data.
+
 ## Step 7 — Verify
 
 - Build/typecheck to confirm the SDK wiring compiles:
@@ -207,5 +265,7 @@ build time:
 - Initialize Sentry before any other application code runs.
 - Tune sample rates for the environment — do not ship `tracesSampleRate: 1.0` to
   high-traffic production by default.
+- Prefer current Sentry semantic-convention keys for custom span and log
+  attributes; do not use deprecated keys or invent aliases for established ones.
 - Verify with a real captured event and a source-mapped trace before declaring
   setup complete.

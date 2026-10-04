@@ -5,7 +5,9 @@
       "*--no-verify*": "deny",
       "*HUSKY=0*": "deny",
       "*HUSKY_SKIP_HOOKS=*": "deny",
-      "*core.hooksPath*/dev/null*": "deny"
+      "*core.hooksPath*/dev/null*": "deny",
+      "*git commit -n*": "deny",
+      "*git commit -an*": "deny"
     }
   },
   "share": "disabled",

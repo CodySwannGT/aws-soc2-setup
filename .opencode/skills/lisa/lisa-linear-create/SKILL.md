@@ -1,6 +1,6 @@
 ---
 name: lisa-linear-create
-description: "Creates Linear Projects (Epic-equivalent), Issues (Story / Task / Bug / Spike), and sub-Issues (Sub-task) from code files or descriptions. Analyzes the input, determines the appropriate hierarchy, and creates items with comprehensive quality requirements including test-first development and Validation Journey. The Linear counterpart of lisa-jira-create — delegates every write to lisa-linear-write-issue."
+description: "Creates Linear Projects…"
 allowed-tools: ["Read", "Glob", "LS", "Skill"]
 ---
 
@@ -58,7 +58,9 @@ Items that change runtime behavior should include a `## Validation Journey` sect
 
 ### How to Write
 
-Design the journey based on the **change type**. Place `[EVIDENCE: name]` markers at key verification points.
+Design the journey based on the **change type**. Place typed `[EVIDENCE: <artifact-type>: <name>]` markers at key verification points (types: `screenshot`, `recording`, `http-transcript`, `cli-output`, `log-snippet`, `db-query-output`, `perf-trace`, `test-run-log`, `deploy-log`, `state-dump` — see the `verification` rule).
+
+To point at evidence owned by another work item, use exactly `[EVIDENCE-REF: <work-item-ref> | <artifact-type>: <kebab-case-name>]`. It is non-claiming and cannot satisfy S14; never paste or quote the sibling's `[EVIDENCE: ...]` marker into this item.
 
 ```markdown
 ## Validation Journey
@@ -71,9 +73,9 @@ Design the journey based on the **change type**. Place `[EVIDENCE: name]` marker
 ### Steps
 1. Verify the current state before changes
 2. Apply the change (run migration, deploy, etc.)
-3. Verify the expected new state [EVIDENCE: state-after-change]
-4. Test error/edge cases [EVIDENCE: error-handling]
-5. Verify rollback or cleanup if applicable [EVIDENCE: rollback-check]
+3. Verify the expected new state [EVIDENCE: http-transcript: state-after-change]
+4. Test error/edge cases [EVIDENCE: screenshot: error-state-rendered]
+5. Verify rollback or cleanup if applicable [EVIDENCE: db-query-output: rows-restored-after-rollback]
 
 ### Assertions
 - Describe what must be true after verification
@@ -122,7 +124,9 @@ Items must be created in parent-before-child order so each child can be passed i
 
 1. Invoke `lisa-linear-write-issue` for the Epic (Project). Capture the returned Project ID.
 2. For each Story, invoke `lisa-linear-write-issue` with the Project ID as `parent_project_id`. Capture each Issue identifier.
-3. For each Sub-task, invoke `lisa-linear-write-issue` with the Story Issue ID as `parent_issue_id`.
+3. For each Sub-task, invoke `lisa-linear-write-issue` with the Story Issue ID as `parent_issue_id` and explicit `build_ready: true`.
+
+- **Declare readiness on every leaf write.** Per the `ready-role-filing` rule an omitted `build_ready` is **not build-ready** on any tracker, so pass `build_ready: true` on each Sub-task (the leaf work units this skill plans) and never on the Epic or Stories, which are containers per `leaf-only-lifecycle`. A leaf that is deliberately held instead passes `human_gate: "<why a human must judge this first>"`. Filing a leaf with neither is an incomplete handoff and `lisa-linear-write-issue` rejects it.
 
 ### What to pass to each invocation
 

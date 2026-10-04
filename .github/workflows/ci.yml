@@ -10,7 +10,15 @@ on:
 jobs:
   quality:
     name: 🔍 Quality Checks
-    uses: CodySwannGT/lisa/.github/workflows/quality.yml@main
+    # A reusable workflow may only DOWNGRADE the caller's grant, so the
+    # work-item traceability job can enforce nothing the caller does not
+    # hold. With no block here the job received contents+metadata read
+    # only, and its `gh pr view` / `gh issue view` calls failed (#2476).
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    uses: CodySwannGT/lisa/.github/workflows/quality.yml@995f533b00d9b8a60256096bf6d28940164cd893 # v4.69.1
     with:
       node_version: '22.21.1'
       package_manager: 'bun'

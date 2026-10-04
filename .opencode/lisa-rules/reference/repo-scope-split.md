@@ -1,5 +1,54 @@
 # Repo Scope & Work-Time Splitting
 
+> Demoted from the always-on eager tier by CodySwannGT/lisa#3992. The
+> section below is the former eager head, preserved verbatim; the full
+> contract follows it. Reachable on demand via [the rule index](../eager/00-rule-index.md).
+
+## Repo Scope & Work-Time Splitting (load-bearing)
+
+**Leaf work units are single-repo.** A leaf is an individually implementable ticket with no open children — the by-design leaf types **Bug, Task, Sub-task, Improvement**, plus a childless **Story** or **Spike** (structurally a leaf per `leaf-only-lifecycle`). Each names exactly one repo. An **Epic**, and any **Story/Spike that still holds child work**, are coordination containers and may span repos.
+
+Enforced at four points: gate **S10** (`*-validate-*`, write time), `task-decomposition` step 1.5 (PRD-decomposition time), claim-time repo scoping (`*-build-intake`), and the work-time split procedure (an existing ticket about to be implemented).
+
+## Choose the right strategy
+
+- **Decomposition-time (no tickets exist yet):** use `task-decomposition` step 1.5 — one work unit per repo under a parent Story.
+- **Work-time (a ticket already exists):** narrow the original to one repo, spin off a sibling per additional repo, link by dependency. Do NOT invent a new parent — siblings inherit the original's existing parent.
+
+## Work-time split (pre-flight gate, agent-performed)
+
+1. **Detect repos.** Parse description + AC + approach, confirm against actual code surfaces. If single-repo, no split.
+2. **Pick the keeper.** Default: the original keeps the consumer / user-facing repo.
+3. **Create one sibling per extra repo**, cloning metadata (re-prefix summary, scope AC, carry parent, env, sign-in).
+4. **Link by dependency.** Producer **blocks** consumer (`is blocked by` on consumer / `blocks` on producer). No clear direction → `relates to`.
+5. **Narrow the original.** Edit summary prefix, Repository section, AC; remove cross-repo references.
+6. **Comment** on the original noting the split, linking each sibling.
+7. **Re-validate.** Run `tracker-verify` (S10) on the original and every sibling. All must PASS single-repo.
+8. **Proceed in dependency order.** Producer siblings first.
+
+## When to BLOCK instead of split
+
+Fall back to the standard BLOCK + reassign-to-Reporter path when:
+
+- Repos cannot be determined confidently from ticket + code.
+- Splitting would strand stakeholder context only the reporter can re-scope.
+- Required clone metadata (parent, env, credentials) is itself missing.
+
+## Claim-time repo scoping (build-intake)
+
+A tracker can oversee multiple repos. Build-intake claims only current-repo tickets. Resolve current repo per `config-resolution` (config `repo` → `github.repo` → git remote basename).
+
+**Query-time pre-filter (do this first, where expressible).** Scope the candidate query to the current repo so sibling-repo tickets never enter the set — on JIRA, append `AND (labels = "repo:<current>" OR labels IS EMPTY)`. This pre-applies only the unambiguous wrong-repo → skip arm; `labels IS EMPTY` keeps unlabeled tickets visible so the per-candidate gate below can still determine + stamp them. Skip it (broad scan) when the current repo can't be resolved or the query already constrains repo. Apply only where the query layer can express `OR labels IS EMPTY`: JIRA does (applied); GitHub issues are inherently single-repo (not needed); Linear's label filter can't, so it keeps the broad query and relies on the per-candidate gate.
+
+Then, for each ready candidate:
+
+1. **Count distinct repository markers first** — all `repo:<name>` labels plus recognized JIRA repository components, deduplicated by repository. Containers go to the leaf-only gate; do not split them.
+2. **Multi-repo leaf → split, never claim.** More than one repository uses the work-time split; each sibling is build-ready and stamped with its own `repo:<name>`.
+3. **Exactly one repository:** current repo → leaf-only gate + claim; wrong repo → skip.
+4. **No repository marker:** determine from content and code, stamp the resolved markers, then re-apply this decision from the count.
+
+---
+
 Leaf work units are single-repo. A **leaf work unit** is an individually implementable ticket with no open child tickets — the by-design leaf types **Bug, Task, Sub-task, Improvement**, plus a childless **Story** or **Spike** (a childless Story/Spike is structurally a leaf — see `leaf-only-lifecycle`). Each must name exactly one repository. An **Epic**, and any **Story or Spike that still holds child work**, are coordination containers and may span repos.
 
 This invariant is enforced at four points: gate **S10** in the `*-validate-*` skills (write time), `task-decomposition` step 1.5 (PRD-decomposition time), **claim-time repo scoping** in the build-intake skills (when intake decides whether to claim a ready ticket for the current repo — see below), and the work-time split procedure below (when an agent picks up an existing ticket to implement it).
@@ -38,12 +87,10 @@ A ticketing system can oversee multiple repos (one JIRA project / Linear team fo
 
 Resolve the current repo per the `config-resolution` "Repo scoping" section (config `repo` → `github.repo` → git remote basename; stop with a clear error if unresolvable). Then walk the ready candidates in priority order and apply the **repo-scope decision** to each before claiming:
 
-1. **Read the candidate's repo marker** — the `repo:<name>` label (JIRA: also a component equal to a repo name).
-   - **Labeled for another repo** → **skip** cheaply (do not claim, do not re-determine); it stays `ready` for that repo's own intake. Move to the next candidate.
-   - **Labeled for the current repo** → proceed to the leaf-only gate + claim (the cheap, common path once labels exist).
-   - **Unlabeled** → **determine** the target repo(s) from the ticket (description, acceptance criteria, technical approach) confirmed against the actual code surfaces the change requires — the same detection as step 1 of the work-time split. Then **stamp** the resolved `repo:<name>` label(s) so future cycles filter cheaply, and re-apply this decision with the now-known repo.
-2. **Multi-repo leaf → split, never claim.** If determination finds the leaf touches more than one repo, run the **work-time split procedure** below to break it into single-repo siblings — each created **build-ready** (`build_ready: true`, so the build queue auto-claims it) and stamped with its own `repo:<name>`. After the split, the current repo's sibling (if any) becomes a normal current-repo candidate; the others are separate single-repo `ready` leaves for their repos. A multi-repo leaf is never claimed as-is.
-3. **Wrong repo → skip.** A single-repo leaf whose `repo:<name>` ≠ the current repo is left `ready` (and labeled) and skipped; intake moves on until it finds a claimable current-repo leaf, then stops (one item per cycle).
+1. **Count distinct repository markers first** — all `repo:<name>` labels and JIRA components equal to recognized repository names, deduplicated by repository. Containers go to the leaf-only gate and are never split or claimed here.
+2. **Multi-repo leaf → split, never claim.** More than one distinct repository takes the work-time split procedure before any wrong-repository skip. Each sibling is created **build-ready** (`build_ready: true`) and stamped with its own `repo:<name>`. The current repo's sibling, if any, becomes a normal candidate.
+3. **Exactly one repository:** a single-repo leaf for the current repo proceeds to the leaf-only gate + claim; a leaf for another repo is skipped and left ready for its own intake.
+4. **No repository marker:** determine the target repo(s) from description, acceptance criteria, technical approach and actual code surfaces. Stamp the resolved `repo:<name>` labels and re-apply from step 1. Continue until one current-repo leaf is claimed or the candidates are exhausted.
 
 **Query-time pre-filter (the cheapest arm — apply before the per-candidate walk).** When the queue is queryable, scope the candidate **query itself** to the current repo so sibling-repo tickets never even enter the set — instead of pulling the whole project's ready tickets and skipping the wrong ones one-by-one (a full wasted scan when none belong to the current repo, e.g. a JIRA project shared across `frontend`/`backend`/`infrastructure`). On JIRA, append to the JQL:
 
@@ -67,6 +114,6 @@ A container (an Epic, or any item with open child work) is handled by the leaf-o
 
 The procedure is vendor-neutral; the create + link + edit mechanics differ:
 
-- **JIRA** — create via `mcp__atlassian__createJiraIssue` (clone fields, set the same epic parent); link via `mcp__atlassian__createIssueLink` with `Blocks` / `is blocked by` (resolve names via `mcp__atlassian__getIssueLinkTypes`); narrow the original via `mcp__atlassian__editJiraIssue`; comment via `mcp__atlassian__addCommentToJiraIssue`. See `jira-write-ticket` Phase 6.
+- **JIRA** — every operation routes through `lisa-atlassian-access`; never name a vendor MCP tool at a call site (see the `integration-access-layer` rule, and #2148 for why the name is not a stable fact). Create the sibling (clone fields, set the same epic parent); link it with `Blocks` / `is blocked by`, resolving the link-type name first; narrow the original; comment on it. See `jira-write-ticket` Phase 6.
 - **GitHub** — create the sibling issue with the same labels and parent sub-issue; encode the dependency in the body (`Blocked by #<n>` / `Blocks #<n>`) and via the sub-issue/parent graph where used; edit the original's body to narrow scope. See `github-write-issue` Phase 6.
 - **Linear** — create via `lisa-linear-access operation: save-issue` (clone fields, set the same `projectId`); add a blocking relation via the `relations` field or a paired relation call; edit the original to narrow scope. See `linear-write-issue` Phase 6.

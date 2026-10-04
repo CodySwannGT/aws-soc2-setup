@@ -1,6 +1,6 @@
 ---
 name: lisa-jira-sync
-description: "Syncs plan progress to a linked JIRA ticket. Posts plan contents, progress updates, branch links, and PR links at key milestones. Use this skill throughout the plan lifecycle to keep tickets in sync."
+description: "Syncs plan progress to a linked…"
 allowed-tools: ["Skill", "Bash", "Read", "Glob", "Grep"]
 ---
 
@@ -55,8 +55,13 @@ Before adding a comment, check for an existing milestone comment to avoid duplic
 When `$ARGUMENTS` includes `pr_url=<url>` for `PR ready` or `PR merged`, ensure the JIRA ticket has a durable ticket -> PR link:
 
 1. Prefer the JIRA development-link surface when the site's GitHub/JIRA integration or remote-link API is available through `lisa-atlassian-access`; verify by re-reading the ticket's remote links / development metadata.
-2. If native linkage is unavailable, unconfigured, cross-system, or cannot be verified, create or update a single managed JIRA comment containing the PR URL. The comment must start with `[lisa-pr-link]` and include the milestone (`pr-ready` or `pr-merged`) and merge SHA when available.
-3. Keep the fallback idempotent: read existing comments, find the `[lisa-pr-link]` comment for the same PR URL, and update/skip it instead of appending duplicates. If the current access layer cannot update comments in place, skip when an identical managed comment already exists and otherwise add exactly one replacement comment with the stable marker.
+2. Establish the managed backlink comment by running the command that owns it — never by hand, and never by describing the procedure here:
+
+   ```bash
+   node scripts/lisa-work-item.mjs backlink --ref <work-item> --pr-url <url>
+   ```
+
+   It creates the `[lisa-pr-link]` comment or updates the one already present, instead of appending duplicates, so it is safe to run on every milestone. This is **unconditional** — run it whether or not native linkage exists or cannot be verified, because the required Work-Item Traceability check reads this comment and nothing else guarantees one. The comment carries the marker and the PR URL only; the milestone (`pr-ready` / `pr-merged`) and merge SHA belong in the milestone progress note, so that a rerun at a new milestone still converges on one backlink comment.
 
 The PR body/branch issue key is the PR -> ticket side. This step is the required ticket -> PR side.
 
@@ -66,9 +71,13 @@ Based on the milestone, suggest (but don't automatically perform) a status trans
 
 | Milestone | Suggested Status |
 |-----------|-----------------|
-| Plan created | "In Progress" |
+| Plan created | configured `jira.workflow.claimed` status |
 | PR ready | configured `jira.workflow.review` status, or no transition when unconfigured |
-| PR merged | "Done" |
+| PR merged | configured `jira.workflow.done` status for the PR's target environment (env-keyed `done` resolved via `deploy.branches`), or no transition when unconfigured |
+
+Every suggested transition is bound by the **Tracker status vocabulary** section of `lisa-tracker-sync` — cite it, do not restate the policy. It is shared by all three vendor arms so the bar cannot drift between them, and it carries the two consequences that matter here: a milestone whose role is unset gets a comment rather than a transition, and a fallback may inform a read but never supply a write target.
+
+`review` is optional on JIRA and has no default. Resolve it through the shared resolver rather than an inlined helper — `lisa-jira-evidence/scripts/post-evidence.sh` already models the correct behaviour (empty default, explicit skip branch, `leaving <ID> in its current (claimed) status`).
 
 ### Step 5: Parent Status Rollup (`--rollup`)
 
@@ -85,7 +94,7 @@ When invoked with `--rollup`, this skill **derives a parent/container ticket's s
 | else any child has **started** (`In Progress` / `Code Review`, or shipped to an env while a sibling has not) | `claimed` | `In Progress` |
 | else (children exist, none started) | — | unchanged — parent keeps its non-ready container status |
 
-- **Blocked dominates** — a single blocked child surfaces `Blocked` on the parent even while siblings progress.
+- **Blocked dominates** — a single blocked child surfaces `Blocked` on the parent even while siblings progress. It never says *which* child or *which kind* of hold; resolve and run the shared classifier exactly as `lisa-tracker-sync` specifies, then carry its per-class report — blocking leaf, path, and who must act — into the rollup note. A missing classifier or non-zero exit is a strict **no-write** result: do not transition the parent and do not post/update a rollup comment; report the failure, never an all-clear. See `leaf-only-lifecycle` → **Classifying a hold**.
 - **Least-advanced env wins** — the parent reaches an env only when every required child has reached at least that env; it never sits ahead of its laggard child. Apply native terminal resolution (the `leaf-only-lifecycle` Terminal native closure) only when the resolved env is the production `Done`, never at `On Dev`/`On Stg`.
 - **"Required" children only** — won't-do / optional children do not hold the parent open.
 - **Recursive** — an Epic reaches an env only when its Stories have themselves rolled up to at least that env; a Story reaches it only when its Sub-tasks have. Evaluate bottom-up.
