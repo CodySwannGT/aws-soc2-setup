@@ -51,8 +51,8 @@
       }
     },
     "test-integration": {
-      "push": "off",
-      "pull-request": "off"
+      "push": "required",
+      "pull-request": "required"
     },
     "code-style": {
       "pull-request": "required"
