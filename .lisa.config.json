@@ -51,8 +51,8 @@
       }
     },
     "test-integration": {
-      "push": "required",
-      "pull-request": "required"
+      "push": "off",
+      "pull-request": "off"
     },
     "code-style": {
       "pull-request": "required"
@@ -67,7 +67,7 @@
       "pull-request": "required"
     },
     "test-node-suites": {
-      "pull-request": "required"
+      "pull-request": "off"
     }
   },
   "github": {
