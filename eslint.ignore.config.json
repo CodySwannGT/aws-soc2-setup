@@ -32,10 +32,14 @@
 
     ".lisabak/**",
     ".claude/worktrees/**",
+    ".worktrees/**",
+    "worktrees/**",
     ".claude-active-project/**",
     ".claude-active-plan/**",
     "coverage/**",
     "**/coverage/**",
+    ".stryker-tmp/**",
+    "**/.stryker-tmp/**",
     "**/*spec.ts",
     "resolver-test.setup.ts",
     "**/*.factory.ts",
@@ -71,8 +75,6 @@
     "*.d.ts",
     "esbuild.plugins.js",
 
-    "projects/**/scripts/**",
-    "scripts/**",
 
     "lib/**/*.js",
     "src/lib/**/*.js",

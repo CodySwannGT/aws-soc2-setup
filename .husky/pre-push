@@ -1,39 +1,665 @@
 # BEGIN: AI GUARDRAILS
 
-# Detect package manager (check if tool is available before using it)
-# Priority: bun > yarn > npm (bun first since package.json engines prefer it)
-if ([ -f "bun.lockb" ] || [ -f "bun.lock" ]) && command -v bun >/dev/null 2>&1; then
-  PACKAGE_MANAGER="bun"
-  RUNNER="bun run"
-elif [ -f "yarn.lock" ] && command -v yarn >/dev/null 2>&1; then
-  PACKAGE_MANAGER="yarn"
-  RUNNER="yarn"
-elif [ -f "package-lock.json" ]; then
-  PACKAGE_MANAGER="npm"
-  RUNNER="npm run"
-else
-  # Default to npm if no lock file is found or tool is not available
-  PACKAGE_MANAGER="npm"
-  RUNNER="npm run"
+# BEGIN: deletion-only push guard
+# ---------------------------------------------------------------------------
+# A push that only deletes refs has nothing for a gate to prove.
+#
+# Git runs this hook for `git push --delete` too, and before this block existed
+# the whole file ran: slow lint, the coverage test run, integration, dead-code,
+# thresholds, typecheck, against a push carrying zero commits. Measured on a
+# fixture project with a valid `gates` block, a pure deletion executed every
+# declared push gate and was then REFUSED — the ref was still on the remote
+# afterwards. The only way through was `--no-verify`, which is the one flag this
+# repository keeps a hook devoted to blocking. A policy that forces the bypass
+# it forbids teaches that the bypass is negotiable, and the next use of it will
+# not be for a branch deletion.
+#
+# Git feeds one line per ref on stdin, `<local ref> <local sha> <remote ref>
+# <remote sha>`. Captured from real pushes:
+#
+#   (delete) 000...000 refs/heads/doomed 2163bd5...   deletion: LOCAL sha zeroed
+#   HEAD     8239f41... refs/heads/live  000...000    new branch: REMOTE zeroed
+#
+# So the SECOND field decides, not "a line containing zeroes" — the first push
+# of a new branch carries an all-zero remote sha and must still run everything.
+# A push that mixes a deletion with a commit-carrying ref introduces commits, so
+# it runs everything too.
+#
+# READING THE STREAM SPENDS IT. Git delivers those lines exactly once, and
+# `lisa-work-item.mjs validate-push` below parses the same stream to learn which
+# refs are being pushed, as does any declared gate that reads it. So this
+# captures the stream and REPLAYS it with `exec <`, restoring stdin for the rest
+# of the hook byte for byte. Piping it to the validator alone would not be
+# enough: a declared gate would still be starved. Letting it fall back to empty
+# stdin would be worse than that — `validate-push` tolerates empty stdin by
+# falling back to `git rev-list HEAD --not --remotes=<remote>`, so a guard that
+# consumed and did not replay would silently downgrade traceability on EVERY
+# push rather than fix anything. A hook that runs too much is a worse hook; a
+# hook that proves too little is a worse gate.
+#
+# If no scratch file can be created, the guard stands down without reading a
+# single byte and the hook behaves exactly as it did before. Failing towards
+# "run the gates" is the only safe direction here.
+#
+# The project-specific extension slot at the bottom of this file does not run on
+# a deletion either. That is deliberate rather than overlooked: the slot exists
+# to add push-moment checks, and a push carrying no commits is exactly the push
+# there is nothing to check. A host that needs to act on deletions should hook
+# `reference-transaction` on the remote, not the local pre-push.
+# ---------------------------------------------------------------------------
+LISA_PUSHED_REFS="$(mktemp "${TMPDIR:-/tmp}/lisa-pushed-refs.XXXXXXXX")" || LISA_PUSHED_REFS=""
+if [ -n "$LISA_PUSHED_REFS" ]; then
+  cat > "$LISA_PUSHED_REFS"
+  LISA_PUSHED_REF_COUNT=0
+  LISA_PUSHED_COMMIT_COUNT=0
+  # The `||` keeps a final line with no trailing newline. A line whose second
+  # field is empty — a blank or malformed line — counts as commit-carrying,
+  # because a push this cannot read must never be classified as a deletion.
+  while read -r LISA_PUSHED_LOCAL_REF LISA_PUSHED_LOCAL_SHA LISA_PUSHED_TAIL || [ -n "$LISA_PUSHED_LOCAL_REF" ]; do
+    LISA_PUSHED_REF_COUNT=$((LISA_PUSHED_REF_COUNT + 1))
+    case "$LISA_PUSHED_LOCAL_SHA" in
+      *[!0]* | "") LISA_PUSHED_COMMIT_COUNT=$((LISA_PUSHED_COMMIT_COUNT + 1)) ;;
+    esac
+  done < "$LISA_PUSHED_REFS"
+  if [ "$LISA_PUSHED_REF_COUNT" -gt 0 ] && [ "$LISA_PUSHED_COMMIT_COUNT" -eq 0 ]; then
+    rm -f "$LISA_PUSHED_REFS"
+    echo "ℹ️  Deletion-only push: no commits are leaving this machine, so the push gates have nothing to prove."
+    exit 0
+  fi
+  # Put the stream back for the validator and for every declared gate below.
+  exec < "$LISA_PUSHED_REFS"
+  # Unlinked while the descriptor above is still open, so nothing is left in
+  # TMPDIR and no later `trap ... EXIT` in this file can drop the cleanup.
+  rm -f "$LISA_PUSHED_REFS"
+fi
+unset LISA_PUSHED_REFS LISA_PUSHED_REF_COUNT LISA_PUSHED_COMMIT_COUNT
+unset LISA_PUSHED_LOCAL_REF LISA_PUSHED_LOCAL_SHA LISA_PUSHED_TAIL
+# END: deletion-only push guard
+
+# BEGIN: pushed refs file
+# ---------------------------------------------------------------------------
+# The pushed refs, kept somewhere every later reader can still find them.
+#
+# READING THE STREAM SPENDS IT. Git delivers `<local ref> <local sha> <remote
+# ref> <remote sha>` on stdin exactly once, and this hook has four readers: the
+# deletion guard above, the destination guard below, `validate-push`, and every
+# declared gate. Each one that reads it replays it — but a replay only reaches
+# the NEXT reader in this file. A gate the runner spawns is a different process
+# started at a different time, and by then whichever gate ran before it may
+# already have drained the stream for good.
+#
+# That is not hypothetical, it is CodySwannGT/lisa#3874: on a project that
+# declares `gates.traceability`, the built-in call below stands down and the
+# work-item check runs from inside the gate runner instead. It found empty
+# stdin, fell back to `git rev-list HEAD --not --remotes=<remote>` — the
+# PUSHER'S branch, not the pushed one — and printed
+# `WORK_ITEM_TRACKING_OK 0 commit(s)` for a branch whose commit carried a
+# perfectly good `Work-Item:` trailer. A green meaning "I had nothing to look
+# at", in the same shape as a green meaning "I looked and it was clean".
+#
+# A named file has none of that ordering. It is written once, read as many
+# times as anything likes, and removed on exit. Stdin is still replayed byte
+# for byte, so nothing that reads the stream today has to change.
+#
+# If no scratch file can be created this stands down without reading a byte and
+# the hook behaves exactly as it did before — the same fail-towards-running
+# direction the deletion guard takes.
+# ---------------------------------------------------------------------------
+LISA_PUSHED_REFS_FILE="$(mktemp "${TMPDIR:-/tmp}/lisa-pushed-refs-file.XXXXXXXX")" || LISA_PUSHED_REFS_FILE=""
+if [ -n "$LISA_PUSHED_REFS_FILE" ]; then
+  cat > "$LISA_PUSHED_REFS_FILE"
+  # Put the stream back for the guards and gates that still read stdin.
+  exec < "$LISA_PUSHED_REFS_FILE"
+  # Exported, because the reader that needs it most is a grandchild process:
+  # the gate runner's `check:work-item:push`. `--refs` names the same file for
+  # anyone invoking the validator directly.
+  export LISA_PUSHED_REFS_FILE
+  # Both traps remove both files, so whichever is installed last still cleans
+  # up everything. A single-file trap here would be silently replaced by the
+  # gate-coverage trap further down and leak this file on every push.
+  trap 'rm -f "$LISA_PUSHED_REFS_FILE" "$LISA_GATE_COVERAGE"' EXIT
+fi
+# END: pushed refs file
+
+WORK_ITEM_SCRIPT="node_modules/@codyswann/lisa/all/copy-overwrite/scripts/lisa-work-item.mjs"
+if [ ! -f "$WORK_ITEM_SCRIPT" ]; then
+  WORK_ITEM_SCRIPT="scripts/lisa-work-item.mjs"
+fi
+if [ ! -f "$WORK_ITEM_SCRIPT" ]; then
+  WORK_ITEM_SCRIPT="all/copy-overwrite/scripts/lisa-work-item.mjs"
+fi
+if ! command -v node >/dev/null 2>&1; then
+  echo "❌ Push blocked: Node.js is required to validate tracker work items."
+  exit 1
 fi
 
-echo "📦 Using package manager: $PACKAGE_MANAGER"
-
-# Run security audit
-echo "🔒 Running security audit..."
-
-# jq is required for all audit paths (JSON config reading, npm/yarn filtering)
+# jq is required too, and it is proved HERE rather than at the first step that
+# needs it.
+#
+# jq decides five things in this hook, not one: the dependency-vulnerability
+# audit below, and — through `jq -e '.scripts[...]'` — whether `lint:slow`,
+# `knip:check`, `knip` and `test:mutation` exist at all. A false result from
+# those four probes is indistinguishable from a project that configures none of
+# them, so a machine without jq printed "Skipping slow lint rules (lint:slow
+# not configured)" about a project that configures it, ran no audit at all, and
+# pushed green.
+#
+# That is the failure this whole subsystem exists to prevent: a control
+# returning success for an input it never examined. Absence of the tool and
+# absence of findings produced the identical observable — a clean push — so
+# nothing downstream could tell an audited push from an unaudited one, and the
+# audit is not decoration: it blocks real pushes on real HIGH advisories.
+#
+# The audit block used to warn and continue here, on the reasoning that jq "may
+# legitimately be absent". That was written when jq gated one optional audit.
+# The honest treatment is the one node gets immediately above, and the one the
+# pre-commit lint-staged preflight already states in as many words: a check
+# that cannot RUN is not a skip and not a pass — it blocks.
 if ! command -v jq >/dev/null 2>&1; then
+  echo "❌ Push blocked: jq is required and is not installed."
   echo ""
-  echo "⚠️  WARNING: jq is not installed - required for security audit"
+  echo "   Without jq this hook cannot run the dependency-vulnerability audit,"
+  echo "   and cannot read package.json to tell whether lint:slow, knip and"
+  echo "   test:mutation are configured — so it would skip all four and report"
+  echo "   a clean push it never earned."
   echo ""
   echo "To install jq:"
   echo "  macOS:    brew install jq"
   echo "  Windows:  choco install jq  # or scoop install jq"
   echo "  Linux:    apt-get install jq"
   echo ""
-  echo "Continuing without security audit..."
+  exit 1
+fi
+
+# The DEPENDENCY TREE is proved here too, for the same reason and one worse
+# consequence (CodySwannGT/lisa#3913).
+#
+# Every gate below resolves its tool out of `node_modules` — knip, vitest, tsc.
+# An empty tree does not stop those gates; it makes them answer from nothing,
+# and an empty answer is not silent. Upstream, the `type-correctness` gate is
+# what showed this belongs here rather than inside each gate: with no compiler
+# to run it parsed zero diagnostics, concluded from that emptiness that every
+# quarantined file now compiles, and instructed a reader to delete the
+# quarantine entries protecting them — a destructive edit ordered by a control
+# whose inputs never resolved. Its sibling `knip:check` reports unlisted
+# binaries from the identical cause. That one merely LOOKS odd and nobody acts
+# on it, which is exactly why it went unfixed while the dangerous one hid
+# behind it.
+#
+# So this is not a convenience check for a missing install. Absence of the
+# dependencies and absence of findings must not produce the same observable. A
+# check that cannot RUN is not a skip and not a pass — it blocks.
+if [ -f package.json ]; then
+  LISA_DECLARED_DEPS="$(jq -r '((.dependencies // {}) + (.devDependencies // {})) | length' package.json 2>/dev/null)"
+  # A non-numeric or absent answer counts as zero: this guard may not be the
+  # thing that blocks a push over an unreadable package.json.
+  case "$LISA_DECLARED_DEPS" in
+    "" | *[!0-9]*) LISA_DECLARED_DEPS=0 ;;
+  esac
+  # `ls -A` covers absent and present-but-empty in one test, which is the
+  # distinction the gates themselves cannot make.
+  if [ "$LISA_DECLARED_DEPS" -gt 0 ] && [ -z "$(ls -A node_modules 2>/dev/null)" ]; then
+    echo "❌ Push blocked: CANNOT MEASURE — dependencies are not installed."
+    echo ""
+    echo "   package.json declares $LISA_DECLARED_DEPS dependencies and node_modules is"
+    echo "   absent or empty, so the gates below cannot resolve the tools they"
+    echo "   run: tsc, knip and vitest."
+    echo ""
+    echo "   This is NOT a finding about your code, and nothing below it is"
+    echo "   either."
+    echo ""
+    echo "To fix:"
+    echo "  bun install --frozen-lockfile   # or your package manager's equivalent"
+    echo ""
+    exit 1
+  fi
+  unset LISA_DECLARED_DEPS
+fi
+
+# BEGIN: push destination guard
+# ---------------------------------------------------------------------------
+# Refuse a push whose RESOLVED destination is a deploy branch it was not aimed
+# at.
+#
+# `push.default=upstream` (and its deprecated spelling `tracking`) resolves a
+# push's destination from the branch's UPSTREAM rather than from the branch
+# named on the command line. A working branch created the ordinary way —
+# `git checkout -b <branch> origin/main` — has `main` as its upstream, so the
+# ordinary `git push -u origin <branch>` resolves to `refs/heads/main` and lands
+# there. The push reports success. Branch protection and every required check
+# are bypassed, and the operator is told only afterwards, if at all
+# (CodySwannGT/lisa#3495).
+#
+# Measured in Lisa's own repository: two commits reached the default branch this
+# way. Every detection control afterwards fired correctly — the bypass was
+# reported, an agent force-push was refused, the release run was caught and
+# cancelled — and the commits shipped in a published release regardless, because
+# an ordinary unrelated merge cut a release before anyone could rewind. Nothing
+# had prevented the original push. That is why this is a refusal and not a
+# warning.
+#
+# WHY HERE, and not folded into a check that already exists.
+#
+# It reads the RESOLVED DESTINATION, in the third field of the stdin lines. That
+# is the only place in the system where the destination git actually chose is
+# observable; `push.default`, the branch's upstream and the command line are all
+# proxies for it, and the accident is precisely a disagreement between the
+# proxies and the answer. So the check has to live at the push moment, on this
+# stream.
+#
+# It is UNCONDITIONAL. The traceability step below stands down when a project
+# declares `gates.traceability`, and a guard a declaration can switch off is not
+# a guard against an accident. It also runs BELOW the deletion-only guard, which
+# exits first, so deleting a branch still needs no node.
+#
+# WHAT IT ALLOWS, deliberately: `main -> main`, so a merge landed locally still
+# pushes; a `HEAD` local ref, which is how git spells a destination the pusher
+# wrote out in full and how release automation pushes from a detached checkout;
+# and every push whose destination is not a deploy branch at all.
+#
+# READING THE STREAM SPENDS IT — the same constraint the deletion guard above
+# documents, and the same remedy: capture, use, replay with `exec <`. If no
+# scratch file can be created this stands down without reading a byte, leaving
+# the hook exactly as it was; a guard that cannot read the stream must not also
+# starve the checks that can.
+# ---------------------------------------------------------------------------
+#
+# The `-f` test is not belt and braces. This is now the FIRST thing in the file
+# to invoke the validator, so a checkout where no candidate path exists would
+# fail every push with a Node module-resolution error instead of the hook's own
+# message. Standing down leaves that diagnosis to the traceability step below,
+# which owns it and words it properly.
+LISA_DEST_REFS="$(mktemp "${TMPDIR:-/tmp}/lisa-dest-refs.XXXXXXXX")" || LISA_DEST_REFS=""
+if [ -n "$LISA_DEST_REFS" ] && [ -f "$WORK_ITEM_SCRIPT" ]; then
+  cat > "$LISA_DEST_REFS"
+  if ! node "$WORK_ITEM_SCRIPT" validate-push-destination "${1:-origin}" --refs "$LISA_DEST_REFS"; then
+    rm -f "$LISA_DEST_REFS"
+    exit 1
+  fi
+  # Put the stream back, byte for byte, for the validator and every gate below.
+  exec < "$LISA_DEST_REFS"
+  # Unlinked while the descriptor above is still open, so nothing is left in
+  # TMPDIR and no later `trap ... EXIT` in this file can drop the cleanup.
+  rm -f "$LISA_DEST_REFS"
+fi
+unset LISA_DEST_REFS
+# END: push destination guard
+
+# ---------------------------------------------------------------------------
+# Work-item traceability, at the push moment.
+#
+# This call used to be unconditional, and it was the last check in either hook
+# that ran outside the gate facade: `gates.traceability` could say `off` and it
+# still ran, could say `required` and nothing changed. That is the defect #2680
+# measured in CI, one moment earlier. The declaration decides now, and this is
+# the FALLBACK:
+#
+#   declared at push, at any level  -> the registry owns the property. The gate
+#                                      runner below runs what the project
+#                                      declared, and this step stands down.
+#   not declared, or the registry
+#   cannot be read at all           -> this runs, exactly as it always has. A
+#                                      project that has declared nothing loses
+#                                      no protection whatsoever.
+#
+# `off` needs no third branch, for the same reason it needed none in CI: an off
+# declaration is still a declaration, the runner records it as covered, and the
+# built-in step stands down having correctly done nothing. What is refused is
+# the shape where this step runs and its exit code is discarded — a check that
+# reports green having proved nothing is the defect the facade exists to remove.
+#
+# WHY THE DECISION IS RESOLVED HERE rather than read from the coverage file the
+# other built-in steps consult. This step must run BEFORE the GIT_* set is
+# unset below, and before anything else reads the hook's stdin, because Git
+# feeds the refs being pushed in on stdin and that is what the validator parses.
+# No coverage file exists this early, so the declaration is resolved directly.
+# That makes deferring only half a decision; the other half is further down,
+# where this runs after all if the registry never actually proved it.
+# ---------------------------------------------------------------------------
+GATE_REGISTRY=""
+for LISA_GATE_REGISTRY_CANDIDATE in \
+  "node_modules/@codyswann/lisa/all/copy-overwrite/scripts/lisa-gates.mjs" \
+  "scripts/lisa-gates.mjs" \
+  "all/copy-overwrite/scripts/lisa-gates.mjs"
+do
+  if [ -f "$LISA_GATE_REGISTRY_CANDIDATE" ]; then
+    GATE_REGISTRY="$LISA_GATE_REGISTRY_CANDIDATE"
+    break
+  fi
+done
+unset LISA_GATE_REGISTRY_CANDIDATE
+
+# Say, once, which properties the built-in steps below are about to prove with a
+# command written into this file that no declaration governs.
+#
+# REPORT ONLY, and deliberately so. On essentially every installed project the
+# written-in path is the DEFAULT rather than the exception — nothing seeds a
+# `gates` block into a consumer — so a reporter that could fail a push would be
+# a new gate nobody declared. The order this has to happen in is: guarantee a
+# declaration exists (`lisa-gates.mjs seed`), THEN make an absent one a hard
+# failure. Deleting the built-in before either would be worse than both: a
+# required context that runs zero steps reports GREEN.
+#
+# Never changes the exit status. `|| true` covers a resolver that cannot run,
+# and the whole call is skipped when no resolver was found.
+lisa_report_unconfigured() {
+  [ -n "$GATE_REGISTRY" ] || return 0
+  node "$GATE_REGISTRY" unconfigured --moment=push --surface=pre-push-hook || true
+  return 0
+}
+
+# Nothing here discards stderr. A resolver that failed and a project that
+# declared nothing produce the same empty answer, and both send this hook to the
+# built-in step — which is the safe direction — but only one of them is a
+# problem somebody needs to see.
+TRACEABILITY_DECLARED=""
+if [ -n "$GATE_REGISTRY" ]; then
+  TRACEABILITY_DECLARED=$(node "$GATE_REGISTRY" list --moment=push --json --include-off | node -e '
+let raw = "";
+process.stdin.on("data", chunk => { raw += chunk }).on("end", () => {
+  try {
+    const declared = JSON.parse(raw || "[]").some(gate => gate.id === "traceability");
+    process.stdout.write(declared ? "declared" : "");
+  } catch (error) {
+    process.stderr.write(`\u26a0\ufe0f  Could not read the gate registry: ${error.message}\n`);
+  }
+});
+')
+fi
+
+LISA_TRACEABILITY_RAN=""
+if [ "$TRACEABILITY_DECLARED" = "declared" ]; then
+  echo "ℹ️  gates.traceability is declared at push; the gate registry decides what runs."
+else
+  node "$WORK_ITEM_SCRIPT" validate-push "${1:-origin}" || exit 1
+  LISA_TRACEABILITY_RAN=1
+fi
+
+# BEGIN: pushed-tree scope guard
+# ---------------------------------------------------------------------------
+# Everything below this line reads the FILES IN THIS WORKING TREE — lint,
+# types, tests, dead code. That is correct when the branch being pushed is the
+# branch checked out here, which is the ordinary case and is left untouched.
+#
+# It is wrong the moment it is not. A session pinned to one worktree can only
+# push another worktree's branch cross-tree, and when it does, `eslint .` and
+# `knip` walk the PUSHER'S tree while the push carries a commit from somewhere
+# else — and then print PASSED. A green meaning "I examined a different tree"
+# arrives in the same shape as a green meaning "I examined this and it was
+# clean" (CodySwannGT/lisa#3874). Because the worktree binding makes the
+# cross-tree route the only permitted one for a pinned agent, this is not an
+# edge case; it is the normal path for a growing share of the fleet.
+#
+# REFUSING IS THE HONEST ANSWER AND PASSING IS NOT. An operator told "these
+# gates cannot see the tree you are pushing, push it from that tree" has been
+# given a true statement they can act on; one told PASSED has been given a
+# false one. This adds no bypass and takes nothing away: no gate is skipped,
+# relaxed, or made optional, and the push does not proceed.
+#
+# TRACEABILITY RUNS FIRST, and unconditionally, because it is the one push gate
+# that CAN answer correctly from here: it reads git objects, which every
+# worktree of a repository shares, so the pushed range is fully visible from
+# any tree. Refusing before it ran would throw away the one true answer
+# available at this moment — and its verdict is the one an operator most needs,
+# because a missing work item is fixed by rewriting the commit, not by moving
+# to another terminal.
+#
+# ANCESTOR, NOT EQUALITY. A pushed commit reachable from local `HEAD` is in
+# this tree's history — the ordinary "push something older" case — so only a
+# commit this checkout has never contained is out of scope.
+#
+# WHAT IT DELIBERATELY DOES NOT EXAMINE: deletions (the guard above exits
+# first, and a deleted ref has no tree), and any local ref that is neither
+# `refs/heads/*` nor `HEAD` — a tag push moves a label rather than proposing a
+# tree, and release automation pushes tags for commits that shipped long ago.
+# If the refs file could not be written, or `HEAD` is unborn, this stands down
+# rather than guessing.
+# ---------------------------------------------------------------------------
+LISA_OUT_OF_TREE=""
+if [ -n "$LISA_PUSHED_REFS_FILE" ] && git rev-parse -q --verify HEAD >/dev/null 2>&1; then
+  # The `||` keeps a final line with no trailing newline, exactly as the
+  # deletion guard reads the same stream.
+  while read -r LISA_SCOPE_REF LISA_SCOPE_SHA LISA_SCOPE_TAIL || [ -n "$LISA_SCOPE_REF" ]; do
+    case "$LISA_SCOPE_REF" in
+      refs/heads/* | HEAD) ;;
+      *) continue ;;
+    esac
+    # A zeroed or non-hex local sha is a deletion or an unreadable line, and
+    # neither is a tree this can ask a question about.
+    case "$LISA_SCOPE_SHA" in
+      "" | *[!0-9a-f]*) continue ;;
+    esac
+    case "$LISA_SCOPE_SHA" in
+      *[!0]*) ;;
+      *) continue ;;
+    esac
+    if ! git merge-base --is-ancestor "$LISA_SCOPE_SHA" HEAD >/dev/null 2>&1; then
+      LISA_OUT_OF_TREE="$LISA_OUT_OF_TREE
+     $LISA_SCOPE_REF -> $LISA_SCOPE_SHA"
+    fi
+  done < "$LISA_PUSHED_REFS_FILE"
+fi
+unset LISA_SCOPE_REF LISA_SCOPE_SHA LISA_SCOPE_TAIL
+
+if [ -n "$LISA_OUT_OF_TREE" ]; then
+  # The one gate that can answer correctly from here, run before the refusal so
+  # its verdict is not lost to it. Skipped only when it has already run above.
+  if [ -z "$LISA_TRACEABILITY_RAN" ] && [ -f "$WORK_ITEM_SCRIPT" ]; then
+    node "$WORK_ITEM_SCRIPT" validate-push "${1:-origin}" || exit 1
+  fi
   echo ""
+  echo "❌ Push refused: the push checks cannot see the commits being pushed."
+  echo ""
+  echo "   Being pushed, but not in this working tree:$LISA_OUT_OF_TREE"
+  echo ""
+  echo "   This checkout is on $(git rev-parse --abbrev-ref HEAD 2>/dev/null)."
+  echo "   The checks after this point read the files in THIS folder — lint,"
+  echo "   types, tests, dead code. Run here they would report on this"
+  echo "   checkout, not on what is leaving the machine, and report it as a"
+  echo "   pass. That pass would be false, and a false pass is worse than no"
+  echo "   answer, so this stops instead of printing one."
+  echo ""
+  echo "   What to do: push each branch from the folder it is checked out in."
+  echo "   These are the folders this repository is checked out into:"
+  git worktree list 2>/dev/null | sed 's/^/     /'
+  echo ""
+  echo "   Work-item traceability above DID examine the pushed commits — it"
+  echo "   reads git history, which every folder shares — so that answer stands."
+  echo ""
+  exit 1
+fi
+unset LISA_OUT_OF_TREE
+# END: pushed-tree scope guard
+
+# Git supplies repository-local GIT_* variables to hooks. Keep them for push
+# validation above, then remove exactly Git's documented local set so nested
+# repositories created by quality checks use their own working directories.
+GIT_LOCAL_ENV_VARS=$(git rev-parse --local-env-vars) || exit 1
+for GIT_LOCAL_ENV_VAR in $GIT_LOCAL_ENV_VARS; do
+  unset "$GIT_LOCAL_ENV_VAR"
+done
+unset GIT_LOCAL_ENV_VAR GIT_LOCAL_ENV_VARS
+
+# --- lisa:pm-detect ---
+# Detect the package manager this project wants, honoring explicit opt-outs.
+# Precedence: packageManager field > engines "please-use-<pm>" sentinel >
+# lockfile presence (minus any PM the engines forbid) > npm default.
+#
+# The order this replaced claimed to come from `package.json` engines and never
+# read them. Two things were wrong with that. It keyed on lockfile presence
+# ALONE, which is the one thing this product's own installer hook says it must
+# not do: an npm-only project (engines.bun = "please-use-npm", CI runs
+# `npm ci`) that picks up a stray bun.lock gets bun here and npm there, so two
+# Lisa components in one repository disagree about which manager runs the
+# gates. And the justification described LISA's package.json, copied verbatim
+# into repositories whose engines say something else entirely.
+#
+# `pnpm` was absent from the chain, so a pnpm project matched no branch and
+# fell through to npm. Seven sibling detectors in this product already know
+# `pnpm-lock.yaml`; this family was the only one that did not.
+#
+# Kept in step with `install-pkgs.sh`, deliberately: the two must agree, and
+# the failure mode of drift is silent disagreement rather than an error.
+lisa_detect_pm() {
+  _field="" _forced="" _forbidden=""
+  if [ -f package.json ] && command -v jq >/dev/null 2>&1; then
+    _field=$(jq -r '(.packageManager // "") | sub("@.*$";"")' package.json 2>/dev/null)
+    _forced=$(jq -r 'first((.engines // {})[] | strings | capture("please-use-(?<pm>bun|npm|yarn|pnpm)")?.pm) // ""' package.json 2>/dev/null)
+    _forbidden=$(jq -r '[(.engines // {}) | to_entries[] | select(((.value|strings) // "") | test("please-use|do-not-use";"i")) | .key] | join(" ")' package.json 2>/dev/null)
+  fi
+  case "$_field" in bun | npm | yarn | pnpm) printf '%s\n' "$_field"; return 0 ;; esac
+  case "$_forced" in bun | npm | yarn | pnpm) printf '%s\n' "$_forced"; return 0 ;; esac
+  _pm_allowed() { case " $_forbidden " in *" $1 "*) return 1 ;; *) return 0 ;; esac; }
+  if { [ -f bun.lockb ] || [ -f bun.lock ]; } && _pm_allowed bun; then printf 'bun\n'; return 0; fi
+  if [ -f pnpm-lock.yaml ] && _pm_allowed pnpm; then printf 'pnpm\n'; return 0; fi
+  if [ -f yarn.lock ] && _pm_allowed yarn; then printf 'yarn\n'; return 0; fi
+  if [ -f package-lock.json ] && _pm_allowed npm; then printf 'npm\n'; return 0; fi
+  printf 'npm\n'
+}
+
+PACKAGE_MANAGER="$(lisa_detect_pm)"
+# A manager that is not installed is NAMED, never silently swapped. The branch
+# this replaced answered "npm" for three different inputs — a pnpm project, a
+# bun project on a machine without bun, a yarn project without yarn — and
+# printed that answer as a detection. A confident wrong tool at commit time
+# costs more than a named fallback.
+if ! command -v "$PACKAGE_MANAGER" >/dev/null 2>&1; then
+  echo "⚠️  $PACKAGE_MANAGER is this project's package manager but is not on PATH; running gates with npm instead."
+  PACKAGE_MANAGER="npm"
+fi
+case "$PACKAGE_MANAGER" in
+  bun) RUNNER="bun run"; EXECUTOR="bunx" ;;
+  pnpm) RUNNER="pnpm run"; EXECUTOR="pnpm exec" ;;
+  yarn) RUNNER="yarn"; EXECUTOR="yarn" ;;
+  *) RUNNER="npm run"; EXECUTOR="npx" ;;
+esac
+# --- end lisa:pm-detect ---
+
+echo "📦 Using package manager: $PACKAGE_MANAGER"
+
+# ---------------------------------------------------------------------------
+# Gate-driven checks. See the matching block in .husky/pre-commit for the full
+# contract; the exit-code routing is identical, at the `push` moment.
+#
+#   exit 0  → the declared gates at this moment ran and none of them blocked.
+#   exit 1  → a required gate FAILED. Block the push.
+#   exit 78 → there is no `gates` block at all. Nothing is covered.
+#   other   → the runner itself could not run. Nothing was proved. Say so
+#             loudly and cover nothing.
+#
+# ONE STEP AT A TIME, NOT ALL OR NOTHING. Exit 0 says the declared gates
+# passed, not that the registry covers every property the steps below prove, so
+# it cannot be the thing that skips them wholesale. The runner writes the
+# properties it covers into $LISA_GATE_COVERAGE and each step stands down only
+# against its own. Fail-safe: no file, an empty file, a runner that could not
+# run, or no exact match all mean the built-in step runs.
+#
+# The project-specific extension slots at the bottom of this file run either
+# way — they are project behaviour, not registry gates.
+# ---------------------------------------------------------------------------
+GATE_RUNNER="node_modules/@codyswann/lisa/all/copy-overwrite/scripts/lisa-run-gates.mjs"
+if [ ! -f "$GATE_RUNNER" ]; then
+  GATE_RUNNER="scripts/lisa-run-gates.mjs"
+fi
+if [ ! -f "$GATE_RUNNER" ]; then
+  GATE_RUNNER="all/copy-overwrite/scripts/lisa-run-gates.mjs"
+fi
+LISA_GATE_COVERAGE=""
+if [ -f "$GATE_RUNNER" ] && command -v node >/dev/null 2>&1; then
+  LISA_GATE_COVERAGE="$(mktemp "${TMPDIR:-/tmp}/lisa-gate-coverage.XXXXXXXX")" || LISA_GATE_COVERAGE=""
+  # Removes the pushed-refs file too: this trap REPLACES the one installed by
+  # the pushed refs file block above, so a single-file body here would leak it.
+  trap 'rm -f "$LISA_GATE_COVERAGE" "$LISA_PUSHED_REFS_FILE"' EXIT
+  if [ -n "$LISA_GATE_COVERAGE" ]; then
+    node "$GATE_RUNNER" --moment=push --coverage="$LISA_GATE_COVERAGE"
+  else
+    # No temp file, so nothing can be covered and every built-in step runs.
+    node "$GATE_RUNNER" --moment=push
+  fi
+  GATE_STATUS=$?
+  if [ $GATE_STATUS -eq 1 ]; then
+    echo ""
+    echo "❌ Push blocked: a required gate failed. See the FAILED line above."
+    echo ""
+    exit 1
+  fi
+  if [ $GATE_STATUS -ne 0 ]; then
+    # Coverage from a run that did not finish is not evidence.
+    if [ -n "$LISA_GATE_COVERAGE" ]; then
+      : > "$LISA_GATE_COVERAGE"
+    fi
+    if [ $GATE_STATUS -ne 78 ]; then
+      echo ""
+      echo "⚠️  The gate runner could not run (exit $GATE_STATUS)."
+      echo "   Nothing was proved by the gate registry — this is NOT a pass."
+      echo "   Running the built-in checks instead."
+      echo ""
+    fi
+  fi
+else
+  echo "ℹ️  Gate runner unavailable; running the built-in checks."
+fi
+
+# Whether a declared gate covers every property named, so the built-in step
+# that proves them can stand down. Exact whole-line matching: a gate id that is
+# a prefix of another must never satisfy it.
+lisa_gate_covers() {
+  [ -n "$LISA_GATE_COVERAGE" ] || return 1
+  [ -s "$LISA_GATE_COVERAGE" ] || return 1
+  for _lisa_gate in "$@"; do
+    grep -Fqx -- "$_lisa_gate" "$LISA_GATE_COVERAGE" || return 1
+  done
+  return 0
+}
+
+lisa_report_unconfigured
+
+# BEGIN: built-in checks — the pre-registry path, kept step for step so a
+# project without a `gates` block behaves exactly as it did before.
+
+# Work-item traceability, when the registry took the property and then proved
+# nothing with it — no runner on disk, a runner that could not run, a coverage
+# file that could not be written. Each of those means nothing was proved, and a
+# declared gate must never be a quieter way of turning a check off than
+# declaring it `off`.
+#
+# A late run is not identical to the early one: the repository-local GIT_*
+# variables are gone by here, and a declared gate that read stdin has already
+# consumed the pushed refs. `validate-push` survives both — with empty stdin it
+# falls back to `git rev-list HEAD --not --remotes=<remote>` — which is what
+# makes a degraded run worth having, and why the early position stays the
+# normal one.
+if lisa_gate_covers traceability; then
+  echo "ℹ️  Covered by the traceability gate; the built-in work-item validation stands down."
+elif [ "$TRACEABILITY_DECLARED" = "declared" ]; then
+  echo "⚠️  gates.traceability is declared at push, but the gate registry proved nothing here."
+  echo "   Running the built-in work-item validation so the property is not lost."
+  node "$WORK_ITEM_SCRIPT" validate-push "${1:-origin}" || exit 1
+fi
+
+# Run the whole-project type check once before code leaves the machine. It is
+# intentionally not a pre-commit gate because TypeScript cannot check only the
+# staged files and rebuilding the full program makes small commits too slow.
+if lisa_gate_covers type-correctness; then
+  echo "ℹ️  Covered by the type-correctness gate; the built-in type check stands down."
+else
+  echo "🔍 Running type check..."
+  $RUNNER typecheck
+  if [ $? -ne 0 ]; then
+    echo "❌ Type check failed. Please fix TypeScript errors before pushing."
+    exit 1
+  fi
+fi
+
+# Run security audit
+echo "🔒 Running security audit..."
+
+# jq is required for all audit paths (JSON config reading, npm/yarn filtering),
+# and is proved present at the top of this hook. There is deliberately no
+# "jq is missing, continue anyway" branch here: that branch made a missing tool
+# and a clean audit print the same thing.
+if lisa_gate_covers dependency-vulnerability; then
+  echo "ℹ️  Covered by the dependency-vulnerability gate; the built-in audit stands down."
 else
   # Load GHSA exclusion IDs from JSON config files (managed + project-local)
   load_audit_exclusions() {
@@ -148,9 +774,153 @@ else
     # npm branch (`npm audit --production`) and the yarn branch
     # (`yarn audit --groups dependencies`). Without it, bun audits
     # devDependencies too and the gate fails on dev-only CVEs that never ship —
-    # the SE-5221 false positive. bun honours `--production` even though
+    # the package-manager selection false positive. bun honours `--production` even though
     # `bun audit --help` omits it from the flag list.
-    AUDIT_JSON=$(bun audit --production --json 2>/dev/null || true)
+    # Normalize bun's transport before parsing, or this gate FAILS OPEN.
+    #
+    # Measured: bun can return gzip-compressed JSON on stdout while reporting a
+    # parse error on stderr. The previous single-line form captured that binary
+    # into AUDIT_JSON, the jq filter below then failed, UNFIXED_HIGH came back
+    # empty, UNFIXED_COUNT resolved to empty, `-gt 0` was false, and the hook
+    # printed "No high or critical vulnerabilities found" and allowed the push.
+    # A security gate reporting success having parsed nothing.
+    #
+    # Lisa's own .husky/pre-push was patched for this; this shipped copy was
+    # not, so every host project on this template carried the fail-open. Keep
+    # the two in step — two copies of one check cannot be kept aligned by
+    # intention, which is exactly how this drifted.
+    # Every path out of this block either parses advisory data or blocks the
+    # push. The gzip branch below handles the transport shape that was measured;
+    # it cannot be the only one handled, because "some other unparseable shape"
+    # is precisely the case nobody has seen yet. An audit whose payload was
+    # never parsed has audited nothing, and printing "no vulnerabilities found"
+    # from that state is the fail-open this whole block exists to remove.
+    #
+    # This hook does not run under `set -e`, so an unguarded mktemp would leave
+    # the path empty, the redirect would fail, and `[ ! -s "" ]` would be true —
+    # a clean verdict from a file that was never written. Same rule the
+    # pre-commit gitleaks scan states: a degraded security check is worse than a
+    # blocked push.
+    if ! AUDIT_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/bun-audit.XXXXXXXX")" || [ -z "$AUDIT_OUTPUT" ]; then
+      echo "❌ Push blocked: could not create a temporary file for the security audit." >&2
+      echo "   Check that TMPDIR (${TMPDIR:-/tmp}) exists and is writable." >&2
+      exit 1
+    fi
+    if ! AUDIT_STDERR="$(mktemp "${TMPDIR:-/tmp}/bun-audit-err.XXXXXXXX")" || [ -z "$AUDIT_STDERR" ]; then
+      rm -f "$AUDIT_OUTPUT"
+      echo "❌ Push blocked: could not create a temporary file for the security audit." >&2
+      echo "   Check that TMPDIR (${TMPDIR:-/tmp}) exists and is writable." >&2
+      exit 1
+    fi
+    # The audit is a NETWORK call, and the network is the one input to this gate
+    # that answers differently to the same question. Measured 2026-09-04, three
+    # consecutive `bun audit --production --json` invocations in one directory
+    # seconds apart: run 1 returned 0 bytes with `Timeout: audit request failed`,
+    # runs 2 and 3 returned 6036 bytes of valid JSON. Read as a single attempt
+    # that is a blocked `git push` — and the push has already paid for the whole
+    # gate chain (tests, typecheck, dead-code, traceability, mutation) because
+    # the audit sits near the end of it. One flaky call, one full cycle.
+    #
+    # So the call is retried, and ONLY the indeterminate outcome is retried:
+    #
+    #   determinate   — the payload parsed. Break immediately, whether it is
+    #                   clean or names a critical advisory. A real vulnerability
+    #                   fails on the FIRST call and is never retried into a pass;
+    #                   a clean audit pays nothing for a knob it did not need.
+    #   indeterminate — nothing parsed: zero bytes, or bytes that are neither
+    #                   JSON nor gzipped JSON. The audit did not happen. That is
+    #                   what a retry can change, and the only thing it may.
+    #
+    # The direction matters more than the retry does. Retrying a determinate
+    # answer is how a gate talks itself out of a finding; this loop cannot,
+    # because a parsed payload leaves the loop before any backoff is reached.
+    #
+    # Three outcomes, three sentences. "The audit did not run" is never collapsed
+    # into "the audit found nothing" (that is the fail-open this block exists to
+    # remove) nor into "the audit found something" (that sends the reader hunting
+    # a vulnerability that was never measured). When every attempt is
+    # indeterminate the block still refuses, with the same two distinguishable
+    # messages it printed before — a retry that muted either would trade a noisy
+    # flake for a silent hole.
+    AUDIT_ATTEMPTS="${LISA_AUDIT_ATTEMPTS:-3}"
+    AUDIT_RETRY_DELAY="${LISA_AUDIT_RETRY_DELAY:-2}"
+    # A non-numeric knob is a typo, not an instruction. This hook does not run
+    # under `set -e`, so `[ abc -le 3 ]` would print an error and the loop would
+    # behave in a way nobody chose; falling back to the default keeps a
+    # fat-fingered env var from quietly disarming the retry.
+    case "$AUDIT_ATTEMPTS" in ''|*[!0-9]*) AUDIT_ATTEMPTS=3 ;; esac
+    case "$AUDIT_RETRY_DELAY" in ''|*[!0-9]*) AUDIT_RETRY_DELAY=2 ;; esac
+    [ "$AUDIT_ATTEMPTS" -ge 1 ] || AUDIT_ATTEMPTS=1
+
+    AUDIT_JSON=""
+    # "" once a payload parsed; otherwise which refusal the last attempt earned.
+    AUDIT_INDETERMINATE=""
+    AUDIT_ATTEMPT=1
+    while [ "$AUDIT_ATTEMPT" -le "$AUDIT_ATTEMPTS" ]; do
+      # bun's own diagnostics are kept rather than discarded. "Lockfile not
+      # found" is the difference between a broken audit and a clean one, and
+      # throwing it away is how a failed command comes to read as a measured
+      # zero. "Timeout: audit request failed" is the line that names this bug,
+      # and an agent grepping the push output for its own expected failure
+      # shapes has already thrown it away once.
+      bun audit --production --json > "$AUDIT_OUTPUT" 2>"$AUDIT_STDERR" || true
+      if [ ! -s "$AUDIT_OUTPUT" ]; then
+        AUDIT_INDETERMINATE="empty"
+      elif jq empty "$AUDIT_OUTPUT" >/dev/null 2>&1; then
+        AUDIT_JSON=$(cat "$AUDIT_OUTPUT")
+        AUDIT_INDETERMINATE=""
+        break
+      else
+        # Bun can return gzip-compressed JSON on stdout while still reporting a
+        # parse error on stderr. Normalize that transport shape before applying
+        # Lisa's advisory allowlist.
+        DECOMPRESSED_AUDIT_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/bun-audit-gz.XXXXXXXX")"
+        if [ -n "$DECOMPRESSED_AUDIT_OUTPUT" ]; then
+          gzip -dc "$AUDIT_OUTPUT" > "$DECOMPRESSED_AUDIT_OUTPUT" 2>/dev/null || true
+        fi
+        # `-s` before `jq empty`: an EMPTY file passes `jq empty` (no input is
+        # not invalid input), so a gunzip that failed and wrote nothing would be
+        # accepted as valid JSON and set AUDIT_JSON to the empty string.
+        if [ -s "$DECOMPRESSED_AUDIT_OUTPUT" ] && jq empty "$DECOMPRESSED_AUDIT_OUTPUT" >/dev/null 2>&1; then
+          AUDIT_JSON=$(cat "$DECOMPRESSED_AUDIT_OUTPUT")
+          rm -f "$DECOMPRESSED_AUDIT_OUTPUT"
+          AUDIT_INDETERMINATE=""
+          break
+        fi
+        rm -f "$DECOMPRESSED_AUDIT_OUTPUT"
+        AUDIT_INDETERMINATE="unparseable"
+      fi
+      if [ "$AUDIT_ATTEMPT" -lt "$AUDIT_ATTEMPTS" ]; then
+        echo "⏳ Security audit attempt $AUDIT_ATTEMPT of $AUDIT_ATTEMPTS parsed no advisory data (the audit did not run — this is not a finding); retrying in ${AUDIT_RETRY_DELAY}s..." >&2
+        if [ "$AUDIT_RETRY_DELAY" -gt 0 ]; then
+          sleep "$AUDIT_RETRY_DELAY"
+        fi
+        AUDIT_RETRY_DELAY=$((AUDIT_RETRY_DELAY * 2))
+      fi
+      AUDIT_ATTEMPT=$((AUDIT_ATTEMPT + 1))
+    done
+
+    if [ "$AUDIT_INDETERMINATE" = "empty" ]; then
+      echo "❌ Push blocked: bun audit produced no output, so nothing was audited." >&2
+      echo "   This is NOT a clean result — a clean audit prints JSON ({} when" >&2
+      echo "   there are no advisories). Empty output means the audit did not run." >&2
+      echo "   Tried $AUDIT_ATTEMPTS attempt(s) with backoff; every one came back" >&2
+      echo "   empty, so this is not the transient registry timeout a retry clears." >&2
+      if [ -s "$AUDIT_STDERR" ]; then
+        echo "   bun said:" >&2
+        sed 's/^/     /' "$AUDIT_STDERR" >&2
+      fi
+      rm -f "$AUDIT_OUTPUT" "$AUDIT_STDERR"
+      exit 1
+    elif [ "$AUDIT_INDETERMINATE" = "unparseable" ]; then
+      rm -f "$AUDIT_OUTPUT" "$AUDIT_STDERR"
+      echo "❌ Push blocked: bun audit output is neither JSON nor gzipped JSON," >&2
+      echo "   so no advisory data was parsed and nothing was audited." >&2
+      echo "   This is NOT a clean result. Re-run 'bun audit --production --json'" >&2
+      echo "   to see what it emitted. Tried $AUDIT_ATTEMPTS attempt(s)." >&2
+      exit 1
+    fi
+    rm -f "$AUDIT_OUTPUT" "$AUDIT_STDERR"
     UNFIXED_HIGH=$(echo "$AUDIT_JSON" | jq -r --arg ids "$AUDIT_EXCLUSIONS" '
       ($ids | split(" ") | map(select(length > 0))) as $ex
       | [ .[]? | .[]?
@@ -159,7 +929,18 @@ else
           | select(($ex | index($g)) | not)
           | $g ]
       | unique')
-    UNFIXED_COUNT=$(echo "$UNFIXED_HIGH" | jq -r 'length' 2>/dev/null || echo 0)
+    # A count that could not be computed is not a count of zero. The old `|| echo
+    # 0` turned a jq filter that errored — an audit whose JSON shape this hook
+    # does not understand — into "no vulnerabilities found", which is the same
+    # fail-open as the transport hole above, one step further down.
+    UNFIXED_COUNT=$(echo "$UNFIXED_HIGH" | jq -r 'length' 2>/dev/null || echo "")
+    if [ -z "$UNFIXED_COUNT" ]; then
+      echo "❌ Push blocked: the audit payload parsed, but the advisory filter" >&2
+      echo "   produced no count, so no advisory was evaluated." >&2
+      echo "   This is NOT a clean result. Re-run 'bun audit --production --json'" >&2
+      echo "   to see the shape it returned." >&2
+      exit 1
+    fi
     if [ "$UNFIXED_COUNT" -gt 0 ]; then
       echo "⚠️ Security audit failed. Unresolved high/critical advisories in production dependencies:"
       echo "$UNFIXED_HIGH" | jq -r '.[]'
@@ -171,7 +952,9 @@ else
 fi
 
 # Run slow lint rules - only if script exists
-if jq -e '.scripts["lint:slow"]' package.json >/dev/null 2>&1; then
+if lisa_gate_covers code-style-slow; then
+  echo "ℹ️  Covered by the code-style-slow gate; the built-in slow lint stands down."
+elif jq -e '.scripts["lint:slow"]' package.json >/dev/null 2>&1; then
   echo "🐢 Running slow lint rules..."
   $RUNNER lint:slow
   if [ $? -ne 0 ]; then
@@ -194,7 +977,9 @@ else
   KNIP_SCRIPT=""
 fi
 
-if [ -n "$KNIP_SCRIPT" ]; then
+if lisa_gate_covers dead-code; then
+  echo "ℹ️  Covered by the dead-code gate; the built-in knip run stands down."
+elif [ -n "$KNIP_SCRIPT" ]; then
   echo "🗑️ Running dead code detection (knip)..."
   $RUNNER "$KNIP_SCRIPT"
   if [ $? -ne 0 ]; then
@@ -208,32 +993,90 @@ else
   echo "ℹ️  Skipping dead code detection (knip not configured)"
 fi
 
-# Run unit tests with coverage
-echo "🧪 Running unit tests with coverage..."
-$RUNNER test:cov
-if [ $? -ne 0 ]; then
-  echo "❌ Unit tests or coverage thresholds failed. Please fix before pushing."
-  exit 1
+# Run unit tests with coverage. `test:cov` proves two properties in one run —
+# the suite passes AND the coverage thresholds hold — so it stands down only
+# when both have a gate declared.
+#
+# WHICH coverage script, and why it decides the cost of every push (#2827).
+# `test:cov` is force-pinned to `vitest run --coverage` with no integration
+# exclusion, so it collects the whole `tests/integration/**` tree — and the
+# integration step below then collects the same tree a second time. Every push
+# paid twice for the slowest population in the repository, and every push had
+# two independent chances for a spawn-heavy integration suite to block it on
+# unchanged code.
+#
+# This is the path that matters, because it is the path host projects take.
+# Nothing seeds a `gates` block into a consumer's `.lisa.config.json`, so the
+# gate runner above exits NO_GATES for them and control arrives here. Fixing
+# only the declared path would have fixed only the Lisa repository itself.
+#
+# `test:cov:unit` is the same run scoped to the unit tree, so the coverage step
+# and the integration step stop overlapping. It is force-pinned by the
+# TypeScript template, so any project on a current Lisa has it. A project whose
+# package.json predates it falls back to `test:cov` and behaves exactly as it
+# did before — slower, but never with the integration tree silently dropped,
+# which is the failure direction that would actually cost something.
+#
+# Resolved with node rather than jq. This used to be a real distinction — jq
+# was optional and node was not — and it stopped being one when jq became a
+# hard requirement at the top of this hook. Either would answer correctly now;
+# node stays because rewriting a working probe buys nothing.
+# The unit script is selected only when it carries LISA_COVERAGE_SCOPE=unit.
+# That marker is not decoration: the threshold factory reads it and enforces the
+# `unit` block, so a `test:cov:unit` without it is measured against the floor
+# written for the FULL suite while running a strictly smaller population. That
+# is a gate whose thresholds describe a different population than the one it
+# measured, and the honest command for such a project is still `test:cov` —
+# slower, but answering to the floor that was configured for what it runs.
+COVERAGE_SCRIPT="test:cov"
+if node -e 'const s=require("./package.json").scripts||{};const preflight="node scripts/lib/worktree-dependencies.mjs && ";const resolve=(k,d)=>{const raw=s[k];const v=typeof raw==="string"&&raw.startsWith(preflight)?raw.slice(preflight.length):raw;const hop=/^\$npm_execpath\s+run\s+(\S+)$/.exec((v||"").trim());return hop&&d<4?resolve(hop[1],d+1):v;};const u=resolve("test:cov:unit",0);const marker=/^(?:env(?:\s+-\S+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*LISA_COVERAGE_SCOPE=unit(?:\s|$)/;process.exit(typeof u==="string"&&marker.test(u.trim())?0:1)' >/dev/null 2>&1; then
+  COVERAGE_SCRIPT="test:cov:unit"
+fi
+
+if lisa_gate_covers test-correctness coverage-adequacy; then
+  echo "ℹ️  Covered by the test-correctness and coverage-adequacy gates; the built-in run stands down."
+else
+  echo "🧪 Running unit tests with coverage ($COVERAGE_SCRIPT)..."
+  $RUNNER "$COVERAGE_SCRIPT"
+  if [ $? -ne 0 ]; then
+    echo "❌ Unit tests or coverage thresholds failed. Please fix before pushing."
+    exit 1
+  fi
 fi
 
 # Run integration tests
-echo "🧪 Running integration tests..."
-$RUNNER test:integration
-if [ $? -ne 0 ]; then
-  echo "❌ Integration tests failed. Please fix failing tests before pushing."
-  exit 1
+if lisa_gate_covers test-integration; then
+  echo "ℹ️  Covered by the test-integration gate; the built-in run stands down."
+else
+  echo "🧪 Running integration tests..."
+  $RUNNER test:integration
+  if [ $? -ne 0 ]; then
+    echo "❌ Integration tests failed. Please fix failing tests before pushing."
+    exit 1
+  fi
 fi
 
 # Run mutation-testing gate - only if script exists.
 # The test:mutation script self-skips instantly when the gate is disabled
 # (mutation.gate.json: "enabled": false), so this adds no cost to projects that
 # have not opted in. When enabled, it runs Stryker diff-only on changed files
-# and fails the push when the mutation score is below thresholds.break.
-if jq -e '.scripts["test:mutation"]' package.json >/dev/null 2>&1; then
+# and fails the push when Stryker does. Which failure that was - a dry run out
+# of wall clock, a score under thresholds.break, or neither - is named by the
+# gate itself on the 'mutation-gate:' line it prints; a score is only ever
+# claimed where one was actually computed.
+if lisa_gate_covers test-meaningfulness; then
+  echo "ℹ️  Covered by the test-meaningfulness gate; the built-in run stands down."
+elif jq -e '.scripts["test:mutation"]' package.json >/dev/null 2>&1; then
   echo "🧬 Running mutation-testing gate..."
   $RUNNER test:mutation
   if [ $? -ne 0 ]; then
-    echo "❌ Mutation-testing gate failed (mutation score below threshold). Strengthen tests before pushing."
+    # Deliberately does NOT name a cause. This line used to say "mutation score
+    # below threshold" for every nonzero exit, including a dry run killed by its
+    # own timeout — a sentence that was false twice over, since no score was
+    # computed and no test was weak. The gate prints its own outcome; that is
+    # the line to read.
+    echo "❌ Mutation-testing gate failed. Read the 'mutation-gate:' line above for"
+    echo "   which outcome it was — this message does not know."
     exit 1
   fi
 fi
@@ -307,6 +1150,8 @@ fi
 #     echo "✅ Lighthouse CI performance audit passed"
 #   fi
 # fi
+
+# END: built-in checks
 
 # Managed verification (UAT) extension slot (see .husky/pre-push.verify).
 # Opt-in project types (e.g. phaser) ship this snippet via Lisa; it mirrors the
