@@ -1,8 +1,11 @@
 import type { Command } from "commander";
 
-import { resolveGlobalOptions, type GlobalFlags } from "../lib/config.js";
+import {
+  requireConfirmation,
+  resolveGlobalOptions,
+  type GlobalFlags,
+} from "../lib/config.js";
 import type { GlobalOptions } from "../lib/config.js";
-import { CliError } from "../lib/errors.js";
 import { info, success, warn } from "../lib/logger.js";
 import { runAction } from "../lib/run.js";
 import {
@@ -37,14 +40,6 @@ export interface AlertManagementOptions {
   ruleName?: string;
   topicName?: string;
 }
-
-const requireYes = (globals: GlobalOptions, action: string): void => {
-  if (!globals.yes) {
-    throw new CliError(
-      `Refusing to ${action} without confirmation. Re-run with --yes to proceed.`
-    );
-  }
-};
 
 const resolveTargets = (
   options: DenyIamUsersOptions,
@@ -111,7 +106,7 @@ export const handleDenyIamUsers = async (
     info(content);
     return;
   }
-  requireYes(globals, "attach an organization-wide deny SCP");
+  requireConfirmation(globals, "attach an organization-wide deny SCP");
   await applyDenyIamUsers(globals, options, content);
 };
 
@@ -153,7 +148,7 @@ export const handleAlertManagement = async (
     );
     return;
   }
-  requireYes(globals, "create management-account IAM alerts");
+  requireConfirmation(globals, "create management-account IAM alerts");
   await applyAlertManagement(globals, options, ruleName, topicName);
 };
 
