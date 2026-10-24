@@ -70,11 +70,13 @@ const provisionBackupKey = async (
 };
 
 const reportDryRun = (
+  globals: GlobalOptions,
   options: BackupCommandOptions,
-  centralAccount: string
+  accounts: ValidatedAccounts,
+  accountId: string
 ): void => {
   info(
-    `[dry-run] Would ensure vault '${options.vaultName}', plan '${SOC2_PLAN_NAME}', a resource selection, and register ${centralAccount} as delegated admin`
+    `[dry-run] Would ensure vault '${options.vaultName}', plan '${SOC2_PLAN_NAME}', and a resource selection in account ${accountId} (${globals.region}), and register ${accounts.adminAccount} as delegated admin`
   );
   if (!options.kmsKey) {
     info("[dry-run] Would create a new multi-region KMS backup key");
@@ -83,14 +85,27 @@ const reportDryRun = (
 
 const reportRegistration = (
   registered: boolean,
-  centralAccount: string
+  adminAccount: string
 ): void => {
   if (registered) {
-    success(`Registered ${centralAccount} as delegated backup administrator`);
+    success(`Registered ${adminAccount} as delegated backup administrator`);
     return;
   }
   warn(
-    `Could not register delegated administrator (expected unless run from the Organizations management account). From the management account run: aws organizations register-delegated-administrator --service-principal backup.amazonaws.com --account-id ${centralAccount}`
+    `Could not register delegated administrator (expected unless run from the Organizations management account). From the management account run: aws organizations register-delegated-administrator --service-principal backup.amazonaws.com --account-id ${adminAccount}`
+  );
+};
+
+const reportScope = (
+  globals: GlobalOptions,
+  accounts: ValidatedAccounts,
+  accountId: string
+): void => {
+  info(
+    `The vault, plan, and selection were created in account ${accountId} (${globals.region}), the account you ran this from, and protect resources in that account only.`
+  );
+  info(
+    `Workload accounts need their own plans: run \`backup\` in each workload account, or manage AWS Organizations backup policies from the delegated administrator ${accounts.adminAccount}. The backup KMS key grants ${accounts.centralAccount} use of the key; no cross-account copy is configured.`
   );
 };
 
@@ -112,18 +127,20 @@ const applyBackupConfiguration = async (
   const selectionId = await createBackupSelection(globals, planId, accountId);
   const registered = await registerBackupAdministrator(
     globals,
-    accounts.centralAccount
+    accounts.adminAccount
   );
   success(`Backup vault ready: ${vaultArn}`);
   success(`Backup plan ready: ${planId}`);
   success(`Resource selection created: ${selectionId}`);
-  reportRegistration(registered, accounts.centralAccount);
+  reportRegistration(registered, accounts.adminAccount);
+  reportScope(globals, accounts, accountId);
 };
 
 /**
- * Execute the `backup` command: validate accounts, ensure an encryption key,
- * vault, plan, and resource selection, then register the central account as a
- * delegated administrator. Honors `--dry-run` by reporting intended actions.
+ * Execute the `backup` command: validate accounts, ensure an encryption key
+ * (usable by the central account), vault, plan, and resource selection in the
+ * CALLER's account, then register the admin account as the delegated backup
+ * administrator. Honors `--dry-run` by reporting intended actions.
  * @param globals - Resolved global options (region, profile, dryRun).
  * @param options - The parsed `backup` command options.
  */
@@ -134,7 +151,7 @@ export const handleBackup = async (
   const accounts = requireValidAccounts(options);
   const identity = await getCallerIdentity(globals);
   if (globals.dryRun) {
-    reportDryRun(options, accounts.centralAccount);
+    reportDryRun(globals, options, accounts, identity.account);
     return;
   }
   await applyBackupConfiguration(globals, options, accounts, identity.account);
@@ -148,15 +165,15 @@ export const registerBackup = (program: Command): void => {
   program
     .command("backup")
     .description(
-      "Configure AWS Backup (vault, plan, selection, delegated admin) for SOC 2"
+      "Configure AWS Backup (vault, plan, selection) in the caller's account and register a delegated admin"
     )
     .requiredOption(
       "-c, --central-account <id>",
-      "Central backup account ID (12 digits)"
+      "Central backup account ID granted use of the backup KMS key (12 digits)"
     )
     .requiredOption(
       "-a, --admin-account <id>",
-      "Backup administrator account ID (12 digits)"
+      "Account to register as the delegated AWS Backup administrator (12 digits)"
     )
     .option("-v, --vault-name <name>", "Backup vault name", DEFAULT_VAULT_NAME)
     .option(

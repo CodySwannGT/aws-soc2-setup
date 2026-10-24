@@ -119,6 +119,34 @@ describe("handleBackup", () => {
     ).rejects.toBeInstanceOf(CliError);
   });
 
+  it("registers --admin-account (not --central-account) as delegated admin", async () => {
+    await handleBackup(globals(), { ...baseOptions, kmsKey: "arn:k" });
+    const calls = orgMock.commandCalls(RegisterDelegatedAdministratorCommand);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.args[0].input).toEqual({
+      AccountId: ADMIN,
+      ServicePrincipal: "backup.amazonaws.com",
+    });
+  });
+
+  it("states that the vault and plan live in the caller account", async () => {
+    const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    await handleBackup(globals(), { ...baseOptions, kmsKey: "arn:k" });
+    const printed = out.mock.calls.map(call => String(call[0])).join("");
+    expect(printed).toContain(
+      `created in account ${ACCOUNT} (us-east-1), the account you ran this from`
+    );
+    expect(printed).toContain("Workload accounts need their own plans");
+  });
+
+  it("previews the caller account and delegated admin under --dry-run", async () => {
+    const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    await handleBackup(globals({ dryRun: true }), { ...baseOptions });
+    const printed = out.mock.calls.map(call => String(call[0])).join("");
+    expect(printed).toContain(`in account ${ACCOUNT}`);
+    expect(printed).toContain(`register ${ADMIN} as delegated admin`);
+  });
+
   it("warns when delegated-admin registration is rejected", async () => {
     orgMock.reset();
     orgMock
