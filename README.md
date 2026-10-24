@@ -105,6 +105,10 @@ aws-soc2-setup setup -p your-admin-profile \
 | `--dry-run` | Preview mutating actions without applying them |
 | `-y, --yes` | Skip confirmation prompts (required for destructive `root` ops) |
 
+You can put global options before or after the subcommand. `aws-soc2-setup root remove-access --yes` and `aws-soc2-setup --yes root remove-access` do the same thing.
+
+> **Running through `npm exec`?** npm treats `--yes` and `--dry-run` as its own flags and removes them before the CLI sees them. Use `npx @codyswann/aws-soc2-setup ...`, or put `--` before the command: `npm exec -- aws-soc2-setup root remove-access --yes`. If npm removes `--dry-run`, the CLI still runs as a preview. If npm removes `--yes`, the CLI refuses to run and its error message explains why.
+
 ## Commands
 
 | Command | Purpose |
@@ -117,12 +121,12 @@ aws-soc2-setup setup -p your-admin-profile \
 | `controltower create-organization` | Create AWS Organizations (`FeatureSet=ALL`) if missing |
 | `controltower create-ous` | Create Infrastructure / Workloads / Sandbox OUs |
 | `controltower register-ou` | Register an OU with Control Tower (`EnableBaseline`) |
-| `controltower provision-account` | Account Factory provisioning (`--wait` supported) |
+| `controltower provision-account` | Account Factory provisioning (`--wait` supported). The SSO user defaults to your own Identity Center user; otherwise pass `--sso-email` |
 | `controltower enable-controls` | Enable Control Tower controls for an OU |
 | `security enable` | Enable GuardDuty, Security Hub, Config, Macie, Inspector |
 | `security audit` | Config aggregator (+ Audit Manager only if already enabled; unavailable for new accounts after 2026-04-30) |
 | `security conformance-packs` | Deploy AWS Config sample Conformance Packs (CIS / WA Security / CT detective) |
-| `backup` | Configure AWS Backup (vault, plan, delegated admin) |
+| `backup` | Configure AWS Backup in the **caller's** account (vault, plan, selection); register `--admin-account` as delegated admin |
 | `kms` | Manage key administrators and rotation |
 | `root delete-keys` / `remove-access` | Root key deletion and org-wide root lockdown (`--yes` required) |
 | `scp deny-iam-users` | SCP denying IAM user / access key / login profile creation, attached to the org root or given OUs (`--yes` required; `--exempt-arn` for break-glass) |
@@ -159,6 +163,24 @@ Run `aws-soc2-setup <command> --help` for flags on each subcommand.
 | 21 | Alert on management-account IAM credential creation | Manual (`scp alert-management -e <email> --yes`) |
 
 Track progress with [`docs/CHECKLIST.md`](docs/CHECKLIST.md).
+
+> **Step 6 note: the "AWS Control Tower Admin" user.** When Control Tower sets up IAM Identity Center, it creates an **AWS Control Tower Admin** user that uses the management account's **root email**. Create your own named admin user (`sso create-user`, `sso assign`). Confirm you can sign in with it, then disable that Control Tower user in Identity Center. Otherwise the root mailbox is also a standing SSO admin login.
+
+### Notes on specific steps
+
+- **`controltower enable-controls`** sends each control to the right API:
+  - Legacy Control Tower `AWS-GR_*` controls are enabled by their Control Tower ARN.
+  - Controls backed by AWS Config rules (S3 bucket SSE, CloudTrail encryption and log-file validation, CloudWatch alarm actions, and others) are looked up in the AWS Control Catalog by their Config rule id.
+  - Landing-zone mandatory controls (`AWS-GR_CLOUDTRAIL_ENABLED`, `AWS-GR_CONFIG_ENABLED`) are reported as **already enforced by the landing zone**. They are not attempted and do not count as failures.
+  - A control with no match in the catalog is reported as **not found in the Control Catalog**. This is a separate outcome from a failed API call.
+- **`controltower provision-account`** gives the new account to **your own Identity Center user** when you run it from an SSO session. It reads the user from the STS session name (`AWSReservedSSO_<set>_<id>/<you@example.com>`). If you use any other kind of credentials, pass `--sso-email <named-user@example.com>`. The CLI rejects the account's root email as the SSO user. Otherwise Account Factory would create an Identity Center user for each account, tied to that account's root mailbox. `--first` / `--last` default to names taken from the SSO email. They only matter if Account Factory has to create the user.
+- **`backup`** creates the KMS key, vault, plan, and resource selection in the account you run it from. That is usually the management account, which should run no workloads. These resources protect only that account's resources.
+  - `--admin-account` is registered as the delegated AWS Backup administrator.
+  - `--central-account` is granted use of the backup KMS key. No cross-account copy is configured.
+  - To back up workload accounts, run `backup` with each workload account's credentials, or manage AWS Organizations backup policies from the delegated administrator.
+- **`root remove-access`** first turns on, and reports, the IAM organization features `RootCredentialsManagement` and `RootSessions`. It then uses a scoped `AssumeRoot` session in each member account to delete root credentials. Control Tower's **AWS-GR_RESTRICT_ROOT_USER** control (enabled by `enable-controls`) is an SCP that denies even those `AssumeRoot` sessions. Accounts under that control are reported as `root already restricted by SCP <id>`, not as failures. Root is already unusable there. To also delete any leftover root credentials, **run `root remove-access` (step 18) before `enable-controls` (step 12)**.
+- **`scp alert-management`** grants the topic owner an explicit list of topic actions, because SNS topic policies reject `sns:*`. Re-running it is safe. The topic, policy, subscription, and EventBridge rule are each created or updated in place.
+- **`sso group` / `sso assign`**: the short flag for `--permission-set` is now `-s`. It used to be `-r`, which clashed with the global `-r, --region`.
 
 ## Security considerations
 
