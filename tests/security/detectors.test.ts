@@ -5,6 +5,7 @@ import {
   UpdateDetectorCommand,
 } from "@aws-sdk/client-guardduty";
 import {
+  BatchGetAccountStatusCommand,
   EnableCommand,
   Inspector2Client,
   UpdateConfigurationCommand,
@@ -36,13 +37,39 @@ const inspectorMock = mockClient(Inspector2Client);
 
 const CTX = { region: "us-east-1" };
 
+const noDelay = async (): Promise<void> => undefined;
+
+const ecrStatus = (status: "ENABLED" | "ENABLING") => ({
+  accounts: [
+    {
+      accountId: "123456789012",
+      state: {
+        status: "ENABLED" as const,
+        errorCode: undefined,
+        errorMessage: undefined,
+      },
+      resourceState: {
+        ec2: undefined,
+        ecr: { status, errorCode: undefined, errorMessage: undefined },
+      },
+    },
+  ],
+});
+
 describe("security/detectors", () => {
+  let writes: string[] = [];
+  const output = (): string => writes.join("");
+
   beforeEach(() => {
     gdMock.reset();
     shMock.reset();
     macieMock.reset();
     inspectorMock.reset();
-    vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    writes = [];
+    vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+      writes.push(String(chunk));
+      return true;
+    });
   });
 
   afterEach(() => {
@@ -87,8 +114,78 @@ describe("security/detectors", () => {
 
   it("enableInspector enables scanning and configuration", async () => {
     inspectorMock.on(EnableCommand).resolves({});
+    inspectorMock
+      .on(BatchGetAccountStatusCommand)
+      .resolves(ecrStatus("ENABLED"));
     inspectorMock.on(UpdateConfigurationCommand).resolves({});
-    await enableInspector(CTX);
+    await enableInspector(CTX, noDelay);
     expect(inspectorMock.commandCalls(EnableCommand)).toHaveLength(1);
+    expect(
+      inspectorMock.commandCalls(UpdateConfigurationCommand)[0]?.args[0].input
+    ).toEqual({ ecrConfiguration: { rescanDuration: "DAYS_30" } });
+  });
+
+  it("enableInspector waits for ECR scanning to finish enabling first", async () => {
+    inspectorMock.on(EnableCommand).resolves({});
+    inspectorMock
+      .on(BatchGetAccountStatusCommand)
+      .resolvesOnce(ecrStatus("ENABLING"))
+      .resolvesOnce(ecrStatus("ENABLING"))
+      .resolves(ecrStatus("ENABLED"));
+    inspectorMock.on(UpdateConfigurationCommand).resolves({});
+    const delay = vi.fn(async () => undefined);
+
+    await enableInspector(CTX, delay);
+
+    expect(delay).toHaveBeenCalledTimes(2);
+    expect(inspectorMock.commandCalls(UpdateConfigurationCommand)).toHaveLength(
+      1
+    );
+  });
+
+  it("enableInspector skips the ECR update when ECR never enables", async () => {
+    inspectorMock.on(EnableCommand).resolves({});
+    inspectorMock
+      .on(BatchGetAccountStatusCommand)
+      .resolves(ecrStatus("ENABLING"));
+
+    await enableInspector(CTX, noDelay);
+
+    expect(inspectorMock.commandCalls(UpdateConfigurationCommand)).toHaveLength(
+      0
+    );
+    expect(output()).toContain("ENABLING");
+  });
+
+  it("enableInspector stops polling and reports when status is unreadable", async () => {
+    inspectorMock.on(EnableCommand).resolves({});
+    inspectorMock
+      .on(BatchGetAccountStatusCommand)
+      .rejects(new Error("not authorized to BatchGetAccountStatus"));
+    const delay = vi.fn(async () => undefined);
+
+    await enableInspector(CTX, delay);
+
+    expect(delay).not.toHaveBeenCalled();
+    expect(inspectorMock.commandCalls(UpdateConfigurationCommand)).toHaveLength(
+      0
+    );
+    expect(output()).toContain("not authorized to BatchGetAccountStatus");
+  });
+
+  it("enableInspector surfaces the AWS error when the update fails", async () => {
+    inspectorMock.on(EnableCommand).resolves({});
+    inspectorMock
+      .on(BatchGetAccountStatusCommand)
+      .resolves(ecrStatus("ENABLED"));
+    inspectorMock
+      .on(UpdateConfigurationCommand)
+      .rejects(new Error("Member accounts cannot update configuration"));
+
+    await enableInspector(CTX, noDelay);
+
+    expect(output()).toContain(
+      "Failed to update Inspector scanning settings: Member accounts cannot update configuration"
+    );
   });
 });
