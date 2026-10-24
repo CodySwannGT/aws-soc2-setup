@@ -6,6 +6,7 @@ import {
   IAMClient,
   ListAccessKeysCommand,
   ListMFADevicesCommand,
+  ListOrganizationsFeaturesCommand,
   ListSigningCertificatesCommand,
 } from "@aws-sdk/client-iam";
 import {
@@ -19,10 +20,10 @@ import { mockClient } from "aws-sdk-client-mock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  enableRootManagement,
   listMemberAccounts,
   removeRootCredentials,
 } from "../../src/root/root-access.js";
+import { enableRootManagement } from "../../src/root/root-features.js";
 
 const iamMock = mockClient(IAMClient);
 const orgMock = mockClient(OrganizationsClient);
@@ -44,15 +45,83 @@ describe("root/root-access", () => {
     vi.restoreAllMocks();
   });
 
-  it("enableRootManagement tolerates already-enabled features", async () => {
+  it("enableRootManagement enables missing features and reports them", async () => {
     orgMock
       .on(EnableAWSServiceAccessCommand)
       .rejects(new Error("already enabled"));
+    iamMock.on(ListOrganizationsFeaturesCommand).resolves({
+      EnabledFeatures: [],
+    });
     iamMock
       .on(EnableOrganizationsRootCredentialsManagementCommand)
       .resolves({});
     iamMock.on(EnableOrganizationsRootSessionsCommand).resolves({});
-    await expect(enableRootManagement(CTX)).resolves.toBeUndefined();
+    await expect(enableRootManagement(CTX)).resolves.toEqual({
+      RootCredentialsManagement: { enabled: true },
+      RootSessions: { enabled: true },
+    });
+  });
+
+  it("enableRootManagement skips features that are already enabled", async () => {
+    orgMock.on(EnableAWSServiceAccessCommand).resolves({});
+    iamMock.on(ListOrganizationsFeaturesCommand).resolves({
+      EnabledFeatures: ["RootCredentialsManagement", "RootSessions"],
+    });
+    await expect(enableRootManagement(CTX)).resolves.toEqual({
+      RootCredentialsManagement: { enabled: true },
+      RootSessions: { enabled: true },
+    });
+    expect(
+      iamMock.commandCalls(EnableOrganizationsRootCredentialsManagementCommand)
+    ).toHaveLength(0);
+    expect(
+      iamMock.commandCalls(EnableOrganizationsRootSessionsCommand)
+    ).toHaveLength(0);
+  });
+
+  it("enableRootManagement reports why a feature could not be enabled", async () => {
+    orgMock.on(EnableAWSServiceAccessCommand).resolves({});
+    iamMock.on(ListOrganizationsFeaturesCommand).resolves({
+      EnabledFeatures: ["RootCredentialsManagement"],
+    });
+    iamMock
+      .on(EnableOrganizationsRootSessionsCommand)
+      .rejects(new Error("not authorized"));
+    await expect(enableRootManagement(CTX)).resolves.toEqual({
+      RootCredentialsManagement: { enabled: true },
+      RootSessions: { enabled: false, reason: "not authorized" },
+    });
+  });
+
+  it("removeRootCredentials classifies explicit SCP denies instead of failing", async () => {
+    stsMock.on(AssumeRootCommand).resolves({
+      Credentials: {
+        AccessKeyId: "ASIA1",
+        SecretAccessKey: "secret",
+        SessionToken: "token",
+        Expiration: undefined,
+      },
+    });
+    const scpDeny = (action: string): Error =>
+      new Error(
+        `User: arn:aws:sts::${MEMBER}:root is not authorized to perform: ${action} on resource: arn:aws:iam::${MEMBER}:root with an explicit deny in a service control policy: arn:aws:organizations::${MANAGEMENT}:policy/o-abc123/service_control_policy/p-ctrestrict`
+      );
+    iamMock
+      .on(DeleteLoginProfileCommand)
+      .rejects(scpDeny("iam:DeleteLoginProfile"));
+    iamMock.on(ListAccessKeysCommand).rejects(scpDeny("iam:ListAccessKeys"));
+    iamMock
+      .on(ListSigningCertificatesCommand)
+      .rejects(scpDeny("iam:ListSigningCertificates"));
+    iamMock.on(ListMFADevicesCommand).rejects(scpDeny("iam:ListMFADevices"));
+
+    const result = await removeRootCredentials(CTX, MEMBER);
+
+    expect(result).toEqual({
+      cleared: [],
+      failures: [],
+      blockedBy: ["p-ctrestrict"],
+    });
   });
 
   it("listMemberAccounts excludes management and inactive accounts", async () => {
