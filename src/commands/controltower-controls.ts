@@ -10,13 +10,13 @@ import type {
   Soc2Type,
 } from "../controltower/control-catalog.js";
 import {
-  enableControlWithFormats,
   enableSecurityHubFallback,
+  enableSoc2Control,
   getOrganizationId,
+  type ControlOutcome,
 } from "../controltower/control-tower.js";
 import {
   buildOuArn,
-  controlIdentifierFormats,
   describeControl,
   extractOuId,
   isValidOuId,
@@ -32,10 +32,7 @@ export interface EnableControlsOptions {
 }
 
 /** Tally of control-enable outcomes. */
-interface EnableSummary {
-  success: number;
-  failure: number;
-}
+type EnableSummary = Record<ControlOutcome["status"], number>;
 
 const SOC2_TYPES = ["type1", "type2", "both"];
 const BASELINES = ["minimal", "recommended", "comprehensive"];
@@ -56,48 +53,75 @@ const requireBaseline = (value: string): ControlBaseline => {
   return value as ControlBaseline;
 };
 
-const reportControl = (ok: boolean, controlId: string): void => {
-  const description = describeControl(controlId);
-  if (ok) {
-    success(`Enabled ${description} (${controlId})`);
+const reportControl = (outcome: ControlOutcome, controlId: string): void => {
+  const label = `${describeControl(controlId)} (${controlId})`;
+  if (outcome.status === "enabled") {
+    success(`Enabled ${label}`);
     return;
   }
-  warn(`Failed to enable ${description} (${controlId})`);
+  if (outcome.status === "enforced") {
+    success(`${label} is already enforced by the landing zone`);
+    return;
+  }
+  if (outcome.status === "not-found") {
+    warn(
+      `${label} was not found in the AWS Control Catalog: ${outcome.reason}`
+    );
+    return;
+  }
+  warn(`Failed to enable ${label}: ${outcome.reason}`);
 };
 
 const enableOne = async (
   globals: GlobalOptions,
   controlId: string,
   targetArn: string
-): Promise<boolean> => {
-  const formats = controlIdentifierFormats(controlId, globals.region);
-  const ok = await enableControlWithFormats(globals, formats, targetArn);
-  reportControl(ok, controlId);
-  return ok;
+): Promise<ControlOutcome> => {
+  const outcome = await enableSoc2Control(globals, controlId, targetArn);
+  reportControl(outcome, controlId);
+  return outcome;
 };
+
+const tally = (outcomes: ControlOutcome[]): EnableSummary =>
+  outcomes.reduce<EnableSummary>(
+    (summary, outcome) => ({
+      ...summary,
+      [outcome.status]: summary[outcome.status] + 1,
+    }),
+    { enabled: 0, enforced: 0, "not-found": 0, failed: 0 }
+  );
 
 const enableAll = async (
   globals: GlobalOptions,
   controls: string[],
   targetArn: string
 ): Promise<EnableSummary> => {
-  const outcomes = await controls.reduce<Promise<boolean[]>>(
+  const outcomes = await controls.reduce<Promise<ControlOutcome[]>>(
     async (accPromise, controlId) => {
       const acc = await accPromise;
       return [...acc, await enableOne(globals, controlId, targetArn)];
     },
     Promise.resolve([])
   );
-  const successes = outcomes.filter(Boolean).length;
-  return { success: successes, failure: outcomes.length - successes };
+  return tally(outcomes);
 };
+
+const summarize = (results: EnableSummary): string =>
+  [
+    `Enabled ${results.enabled} control(s)`,
+    `${results.enforced} already enforced by the landing zone`,
+    `${results["not-found"]} not found in the Control Catalog`,
+    `${results.failed} failed`,
+  ].join(", ");
 
 const maybeFallback = async (
   globals: GlobalOptions,
   options: EnableControlsOptions,
   results: EnableSummary
 ): Promise<void> => {
-  if (!options.alternative || results.success > 0 || results.failure === 0) {
+  const succeeded = results.enabled + results.enforced;
+  const unsuccessful = results["not-found"] + results.failed;
+  if (!options.alternative || succeeded > 0 || unsuccessful === 0) {
     return;
   }
   info("All controls failed; attempting AWS Security Hub fallback...");
@@ -123,7 +147,7 @@ const runControls = async (
     extractOuId(options.ou)
   );
   const results = await enableAll(globals, controls, targetArn);
-  info(`Enabled ${results.success} control(s), ${results.failure} failed`);
+  info(summarize(results));
   await maybeFallback(globals, options, results);
 };
 
@@ -178,7 +202,10 @@ export const registerEnableControls = (
       "Baseline: minimal, recommended, or comprehensive",
       "recommended"
     )
-    .option("-a, --alternative", "Fall back to Security Hub if controls fail")
+    .option(
+      "-a, --alternative",
+      "Fall back to Security Hub if no control could be enabled"
+    )
     .action(async (options: EnableControlsOptions) => {
       await runAction(async () => {
         await handleEnableControls(globals(), options);
