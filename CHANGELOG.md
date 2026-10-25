@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.0.0](https://github.com/CodySwannGT/aws-soc2-setup/compare/v1.1.5...v2.0.0) (2026-10-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **sso:** `sso group` / `sso assign` use `-s` instead of `-r` as the
+short form of `--permission-set`. `-r` now always means `--region`.
+
+🤖 Generated with Claude Code
+
+Co-Authored-By: Claude
+* **controltower:** `controltower provision-account` no longer falls back to the
+account root email for the SSO user. Callers that are not using an IAM
+Identity Center session must pass `--sso-email`. Passing the account's own
+root email as `--sso-email` is now rejected.
+
+🤖 Generated with Claude Code
+
+Co-Authored-By: Claude
+
+### Bug Fixes
+
+* address review on root, backup, and Config-rule controls ([985b7ad](https://github.com/CodySwannGT/aws-soc2-setup/commit/985b7ada98eda1124f60d5e9c6c174f43fd38854)), closes [CodySwannGT/aws-soc2-setup#31](https://github.com/CodySwannGT/aws-soc2-setup/issues/31)
+* **backup:** register --admin-account as delegated admin; state scope ([45100f0](https://github.com/CodySwannGT/aws-soc2-setup/commit/45100f03494fddc33d251f2c23daed7aed7bfc52)), closes [CodySwannGT/aws-soc2-setup#31](https://github.com/CodySwannGT/aws-soc2-setup/issues/31)
+* **cli:** explain and survive npm exec swallowing --yes/--dry-run ([ccc5cc7](https://github.com/CodySwannGT/aws-soc2-setup/commit/ccc5cc787114235b72eeab82fbe051e525ed91b9)), closes [CodySwannGT/aws-soc2-setup#31](https://github.com/CodySwannGT/aws-soc2-setup/issues/31)
+* **controltower:** stop defaulting the Account Factory SSO user to root ([9678180](https://github.com/CodySwannGT/aws-soc2-setup/commit/967818039dfaca5b24f1ce58f786678ba5de9039)), closes [CodySwannGT/aws-soc2-setup#31](https://github.com/CodySwannGT/aws-soc2-setup/issues/31)
+* **controltower:** use real catalog controls and classify enable outcomes ([bd8019d](https://github.com/CodySwannGT/aws-soc2-setup/commit/bd8019dc4568088348b60c5bbbadbe3ca2942a25)), closes [CodySwannGT/aws-soc2-setup#31](https://github.com/CodySwannGT/aws-soc2-setup/issues/31)
+* **root:** report SCP-restricted root concisely and show org features ([7f864c6](https://github.com/CodySwannGT/aws-soc2-setup/commit/7f864c66c253f4e48122f0563614d222fcb5474f)), closes [CodySwannGT/aws-soc2-setup#31](https://github.com/CodySwannGT/aws-soc2-setup/issues/31)
+* **scp:** use topic-scoped SNS actions in the alert topic policy ([0850fb2](https://github.com/CodySwannGT/aws-soc2-setup/commit/0850fb25fefd9f9a672cb1f112530f1c18b67a88)), closes [CodySwannGT/aws-soc2-setup#31](https://github.com/CodySwannGT/aws-soc2-setup/issues/31)
+* **security:** retry AWS Config setup while a new IAM role propagates ([2438df0](https://github.com/CodySwannGT/aws-soc2-setup/commit/2438df05ec125d54d2e070716413d03445534bf9)), closes [CodySwannGT/aws-soc2-setup#31](https://github.com/CodySwannGT/aws-soc2-setup/issues/31)
+* **security:** wait for Inspector ECR scanning before updating rescan ([1282f5b](https://github.com/CodySwannGT/aws-soc2-setup/commit/1282f5bc5a14be9c9d1004fb74d480e99aab6e13)), closes [CodySwannGT/aws-soc2-setup#31](https://github.com/CodySwannGT/aws-soc2-setup/issues/31)
+* **sso:** stop --permission-set shadowing the global -r/--region ([2a36114](https://github.com/CodySwannGT/aws-soc2-setup/commit/2a3611426a715c2485c69d972ad888d1965816ae)), closes [CodySwannGT/aws-soc2-setup#31](https://github.com/CodySwannGT/aws-soc2-setup/issues/31)
+
+
+### Documentation
+
+* document new behaviours, ordering, and the CT admin user ([9b1488d](https://github.com/CodySwannGT/aws-soc2-setup/commit/9b1488de3d103205a1917b73561e6ecc2d3271c7)), closes [CodySwannGT/aws-soc2-setup#31](https://github.com/CodySwannGT/aws-soc2-setup/issues/31)
+
 ### [1.1.5](https://github.com/CodySwannGT/aws-soc2-setup/compare/v1.1.4...v1.1.5) (2026-10-04)
 
 
