@@ -137,6 +137,28 @@ describe("handleBackup", () => {
       `created in account ${ACCOUNT} (us-east-1), the account you ran this from`
     );
     expect(printed).toContain("Workload accounts need their own plans");
+    expect(printed).toContain("resource-based delegation policy");
+    expect(printed).toContain("administrator's IAM role");
+  });
+
+  it("states the central account's key access only for a key it created", async () => {
+    const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    await handleBackup(globals(), { ...baseOptions });
+    const printed = out.mock.calls.map(call => String(call[0])).join("");
+    expect(printed).toContain(
+      `The backup KMS key created by this command grants ${CENTRAL} use of the key.`
+    );
+    expect(printed).not.toContain("You supplied --kms-key");
+  });
+
+  it("says a supplied --kms-key needs its access configured separately", async () => {
+    const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    await handleBackup(globals(), { ...baseOptions, kmsKey: "arn:k" });
+    const printed = out.mock.calls.map(call => String(call[0])).join("");
+    expect(printed).toContain(
+      `You supplied --kms-key, so ${CENTRAL} was not granted use of it; configure that key's policy separately.`
+    );
+    expect(printed).not.toContain("created by this command grants");
   });
 
   it("previews the caller account and delegated admin under --dry-run", async () => {

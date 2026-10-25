@@ -6,6 +6,7 @@ import {
   type GlobalFlags,
 } from "../lib/config.js";
 import type { GlobalOptions } from "../lib/config.js";
+import { CliError } from "../lib/errors.js";
 import { info, success, warn } from "../lib/logger.js";
 import { runAction } from "../lib/run.js";
 import { deleteAccessKey, listRootAccessKeyIds } from "../root/access-keys.js";
@@ -18,6 +19,7 @@ import {
 import {
   enableRootManagement,
   type FeatureStatus,
+  type RootManagementStatus,
 } from "../root/root-features.js";
 
 const deleteKeys = async (
@@ -53,9 +55,9 @@ export const handleDeleteKeys = async (
 
 const RESTRICT_ROOT_HINT =
   "An SCP (typically Control Tower's AWS-GR_RESTRICT_ROOT_USER guardrail) " +
-  "denies even centralized root sessions, so root is already unusable in " +
-  "those accounts. To also delete any leftover root credentials, run " +
-  "`root remove-access` before enabling that control.";
+  "denied the credential-cleanup actions, so root credential removal is " +
+  "incomplete in those accounts and any existing root credentials remain. " +
+  "To delete them, run `root remove-access` before enabling that control.";
 
 /**
  * Report one account's removal result.
@@ -75,7 +77,7 @@ const reportRemoval = (
   const blocked = result.blockedBy.length > 0;
   if (blocked) {
     info(
-      `${where}: root already restricted by SCP ${result.blockedBy.join(", ")}`
+      `${where}: root credential removal incomplete; blocked by SCP ${result.blockedBy.join(", ")}`
     );
   }
   if (result.failures.length > 0) {
@@ -135,6 +137,17 @@ const reportFeature = (label: string, status: FeatureStatus): void => {
   warn(`${label}: not enabled (${status.reason ?? "unknown reason"})`);
 };
 
+const requireRootFeatures = (features: RootManagementStatus): void => {
+  if (
+    !features.RootCredentialsManagement.enabled ||
+    !features.RootSessions.enabled
+  ) {
+    throw new CliError(
+      "Centralized root access requires both RootCredentialsManagement and RootSessions to be enabled; no member accounts were processed. Run from the Organizations management account and retry."
+    );
+  }
+};
+
 const prepareAndListMembers = async (
   globals: GlobalOptions
 ): Promise<MemberAccount[]> => {
@@ -144,6 +157,7 @@ const prepareAndListMembers = async (
     features.RootCredentialsManagement
   );
   reportFeature("Organizations root sessions", features.RootSessions);
+  requireRootFeatures(features);
   return listMemberAccounts(globals);
 };
 

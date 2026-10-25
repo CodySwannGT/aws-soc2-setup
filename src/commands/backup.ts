@@ -96,16 +96,31 @@ const reportRegistration = (
   );
 };
 
+const BACKUP_POLICY_PREREQUISITES =
+  "Managing AWS Organizations backup policies from the delegated administrator also requires the management account to attach an Organizations resource-based delegation policy that allows that account to manage backup policies, and the administrator's IAM role to have the AWS Backup and Organizations policy permissions.";
+
+const keyAccessStatement = (
+  centralAccount: string,
+  keyCreated: boolean
+): string =>
+  keyCreated
+    ? `The backup KMS key created by this command grants ${centralAccount} use of the key.`
+    : `You supplied --kms-key, so ${centralAccount} was not granted use of it; configure that key's policy separately.`;
+
 const reportScope = (
   globals: GlobalOptions,
   accounts: ValidatedAccounts,
-  accountId: string
+  accountId: string,
+  keyCreated: boolean
 ): void => {
   info(
     `The vault, plan, and selection were created in account ${accountId} (${globals.region}), the account you ran this from, and protect resources in that account only.`
   );
   info(
-    `Workload accounts need their own plans: run \`backup\` in each workload account, or manage AWS Organizations backup policies from the delegated administrator ${accounts.adminAccount}. The backup KMS key grants ${accounts.centralAccount} use of the key; no cross-account copy is configured.`
+    `Workload accounts need their own plans: run \`backup\` in each workload account, or manage AWS Organizations backup policies from the delegated administrator ${accounts.adminAccount}. ${BACKUP_POLICY_PREREQUISITES}`
+  );
+  info(
+    `${keyAccessStatement(accounts.centralAccount, keyCreated)} No cross-account copy is configured.`
   );
 };
 
@@ -133,7 +148,7 @@ const applyBackupConfiguration = async (
   success(`Backup plan ready: ${planId}`);
   success(`Resource selection created: ${selectionId}`);
   reportRegistration(registered, accounts.adminAccount);
-  reportScope(globals, accounts, accountId);
+  reportScope(globals, accounts, accountId, options.kmsKey === undefined);
 };
 
 /**
@@ -169,7 +184,7 @@ export const registerBackup = (program: Command): void => {
     )
     .requiredOption(
       "-c, --central-account <id>",
-      "Central backup account ID granted use of the backup KMS key (12 digits)"
+      "Central backup account ID granted use of the backup KMS key this command creates; not applied to a --kms-key you supply (12 digits)"
     )
     .requiredOption(
       "-a, --admin-account <id>",

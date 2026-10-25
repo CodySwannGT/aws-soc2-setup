@@ -183,6 +183,17 @@ describe("controltower/control-tower", () => {
     expect(ctMock.commandCalls(EnableControlCommand)).toHaveLength(0);
   });
 
+  it("enableSoc2Control reports failed, not not-found, when the catalog lookup errors", async () => {
+    catalogMock
+      .on(ListControlsCommand)
+      .rejects(new Error("AccessDeniedException: controlcatalog:ListControls"));
+    await expect(enableSoc2Control(CTX, S3_SSE_RULE, TARGET)).resolves.toEqual({
+      status: "failed",
+      reason: `Control Catalog lookup for AWS Config rule ${S3_SSE_RULE} failed: AccessDeniedException: controlcatalog:ListControls`,
+    });
+    expect(ctMock.commandCalls(EnableControlCommand)).toHaveLength(0);
+  });
+
   it("enableSoc2Control tries Control Tower formats for legacy controls", async () => {
     ctMock.on(EnableControlCommand).resolves({});
     await enableSoc2Control(CTX, "AWS-GR_ENCRYPTED_VOLUMES", TARGET);

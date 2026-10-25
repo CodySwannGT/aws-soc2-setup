@@ -88,8 +88,8 @@ aws-soc2-setup setup --dry-run -p <profile>
 
 ## Step 13 — Configure AWS Backup (automated)
 
-- [ ] `aws-soc2-setup backup -c <centralAccount> -a <adminAccount> ...`. `-a` is registered as the delegated Backup administrator. `-c` is granted use of the backup KMS key.
-- [ ] The vault, plan, and selection are created in the account you run this from. Run `backup` in each workload account too, or manage AWS Organizations backup policies from the delegated administrator.
+- [ ] `aws-soc2-setup backup -c <centralAccount> -a <adminAccount> ...`. `-a` is registered as the delegated Backup administrator. `-c` is granted use of the backup KMS key only when the command creates it; with `--kms-key`, configure that key's policy yourself.
+- [ ] The vault, plan, and selection are created in the account you run this from. Run `backup` in each workload account too, or manage AWS Organizations backup policies from the delegated administrator. For backup policies, the management account must also attach a resource-based delegation policy for that administrator, and the administrator's role needs the matching permissions.
 
 ## Step 14 — Configure audit and reporting (automated)
 
@@ -119,7 +119,7 @@ aws-soc2-setup setup --dry-run -p <profile>
 
 - [ ] Review member accounts (`aws-soc2-setup status`)
 - [ ] `aws-soc2-setup root remove-access --yes`
-- [ ] Prefer running this **before** step 12. `enable-controls` turns on AWS-GR_RESTRICT_ROOT_USER, an SCP that denies even centralized root sessions. After that, accounts are reported as "root already restricted by SCP <id>": root is unusable there, but leftover root credentials cannot be deleted.
+- [ ] Prefer running this **before** step 12. `enable-controls` turns on AWS-GR_RESTRICT_ROOT_USER, an SCP that denies even centralized root sessions. After that, accounts are reported as "root credential removal incomplete; blocked by SCP <id>": existing root credentials remain and cannot be deleted.
 - [ ] Confirm the output shows `Centralized root credentials management: enabled` and `Organizations root sessions: enabled`.
 
 ## Step 19 — Configure KMS key management (optional / manual)

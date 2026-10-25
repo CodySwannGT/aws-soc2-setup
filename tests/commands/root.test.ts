@@ -167,11 +167,39 @@ describe("handleRemoveAccess", () => {
     );
     expect(output).toContain("Organizations root sessions: enabled");
     expect(output).toContain(
-      "Member (222222222222): root already restricted by SCP p-ctrestrict"
+      "Member (222222222222): root credential removal incomplete; blocked by SCP p-ctrestrict"
     );
     expect(output).not.toContain("is not authorized to perform");
     expect(output).not.toContain("Partial removal");
+    expect(output).toContain("root credential removal is incomplete");
+    expect(output).not.toContain("unusable");
   });
+
+  it.each([
+    ["RootCredentialsManagement", ["RootSessions"]],
+    ["RootSessions", ["RootCredentialsManagement"]],
+  ] as const)(
+    "stops before processing members when %s stays disabled",
+    async (_missing, enabled) => {
+      orgMock.on(EnableAWSServiceAccessCommand).resolves({});
+      iamMock
+        .on(ListOrganizationsFeaturesCommand)
+        .resolves({ EnabledFeatures: [...enabled] });
+      iamMock
+        .on(EnableOrganizationsRootCredentialsManagementCommand)
+        .rejects(new Error("not the management account"));
+      iamMock
+        .on(EnableOrganizationsRootSessionsCommand)
+        .rejects(new Error("not the management account"));
+
+      await expect(
+        handleRemoveAccess(globals({ yes: true }))
+      ).rejects.toBeInstanceOf(CliError);
+
+      expect(orgMock.commandCalls(ListAccountsCommand)).toHaveLength(0);
+      expect(stsMock.commandCalls(AssumeRootCommand)).toHaveLength(0);
+    }
+  );
 });
 
 describe("registerRoot", () => {

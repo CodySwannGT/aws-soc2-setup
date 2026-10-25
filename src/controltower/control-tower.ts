@@ -204,12 +204,35 @@ export const resolveConfigRuleControlArn = async (
   return result.Controls?.[0]?.Arn;
 };
 
+/** A resolved catalog ARN, or the outcome to report when the lookup failed. */
+type ArnLookup = { arn: string | undefined } | { outcome: ControlOutcome };
+
+const lookupConfigRuleControlArn = async (
+  context: ControlTowerContext,
+  ruleId: string
+): Promise<ArnLookup> => {
+  try {
+    return { arn: await resolveConfigRuleControlArn(context, ruleId) };
+  } catch (caught) {
+    return {
+      outcome: {
+        status: "failed",
+        reason: `Control Catalog lookup for AWS Config rule ${ruleId} failed: ${errorMessage(caught)}`,
+      },
+    };
+  }
+};
+
 const enableConfigRuleControl = async (
   context: ControlTowerContext,
   ruleId: string,
   targetIdentifier: string
 ): Promise<ControlOutcome> => {
-  const arn = await resolveConfigRuleControlArn(context, ruleId);
+  const lookup = await lookupConfigRuleControlArn(context, ruleId);
+  if ("outcome" in lookup) {
+    return lookup.outcome;
+  }
+  const { arn } = lookup;
   if (!arn) {
     return {
       status: "not-found",
