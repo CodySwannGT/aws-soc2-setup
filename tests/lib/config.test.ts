@@ -19,6 +19,22 @@ describe("resolveGlobalOptions", () => {
     });
   });
 
+  it("honors a --dry-run that npm exec consumed as its own flag", () => {
+    const opts = resolveGlobalOptions(
+      {},
+      { npm_command: "exec", npm_config_dry_run: "true" }
+    );
+    expect(opts.dryRun).toBe(true);
+  });
+
+  it("never treats npm's --yes as confirmation", () => {
+    const opts = resolveGlobalOptions(
+      {},
+      { npm_command: "exec", npm_config_yes: "true" }
+    );
+    expect(opts.yes).toBe(false);
+  });
+
   it("falls back to environment variables when flags are absent", () => {
     const opts = resolveGlobalOptions(
       {},

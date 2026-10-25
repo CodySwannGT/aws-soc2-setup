@@ -303,7 +303,7 @@ export const registerSso = (program: Command): void => {
     .option("--all-users", "Add every identity store user to the group")
     .option("-a, --account-id <id>", "Account to grant the group access to")
     .option(
-      "-r, --permission-set <name>",
+      "-s, --permission-set <name>",
       "Permission set to assign",
       DEFAULT_PERMISSION_SET
     )
@@ -319,7 +319,7 @@ export const registerSso = (program: Command): void => {
     .requiredOption("-u, --user-name <username>", "Username")
     .requiredOption("-a, --account-id <id>", "Account ID (12 digits)")
     .option(
-      "-r, --permission-set <name>",
+      "-s, --permission-set <name>",
       "Permission set to assign",
       DEFAULT_PERMISSION_SET
     )

@@ -24,7 +24,8 @@ const snsMock = mockClient(SNSClient);
 const eventsMock = mockClient(EventBridgeClient);
 
 const CTX = { region: "us-east-1" };
-const TOPIC_ARN = "arn:aws:sns:us-east-1:111111111111:iam-credential-alerts";
+const TOPIC_NAME = "iam-credential-alerts";
+const TOPIC_ARN = `arn:aws:sns:us-east-1:111111111111:${TOPIC_NAME}`;
 const EMAIL = "security@example.com";
 
 describe("scp/management-alerts", () => {
@@ -36,14 +37,55 @@ describe("scp/management-alerts", () => {
   it("ensureAlertTopic creates the topic and grants EventBridge publish", async () => {
     snsMock.on(CreateTopicCommand).resolves({ TopicArn: TOPIC_ARN });
     snsMock.on(SetTopicAttributesCommand).resolves({});
-    await expect(ensureAlertTopic(CTX, "iam-credential-alerts")).resolves.toBe(
-      TOPIC_ARN
-    );
+    await expect(ensureAlertTopic(CTX, TOPIC_NAME)).resolves.toBe(TOPIC_ARN);
     const attributeCalls = snsMock.commandCalls(SetTopicAttributesCommand);
     expect(attributeCalls).toHaveLength(1);
     const policy = String(attributeCalls[0]?.args[0].input.AttributeValue);
     expect(policy).toContain("events.amazonaws.com");
     expect(policy).toContain("arn:aws:iam::111111111111:root");
+  });
+
+  it("ensureAlertTopic uses only topic-scoped SNS actions (no sns:*)", async () => {
+    snsMock.on(CreateTopicCommand).resolves({ TopicArn: TOPIC_ARN });
+    snsMock.on(SetTopicAttributesCommand).resolves({});
+    await ensureAlertTopic(CTX, TOPIC_NAME);
+    const policy = JSON.parse(
+      String(
+        snsMock.commandCalls(SetTopicAttributesCommand)[0]?.args[0].input
+          .AttributeValue
+      )
+    ) as { Statement: { Sid: string; Action: string | string[] }[] };
+    const actions = policy.Statement.flatMap(statement =>
+      [statement.Action].flat()
+    );
+    expect(actions).not.toContain("sns:*");
+    expect(actions.every(action => !action.includes("*"))).toBe(true);
+    const owner = policy.Statement.find(s => s.Sid === "AllowAccountOwner");
+    expect(owner?.Action).toEqual([
+      "sns:GetTopicAttributes",
+      "sns:SetTopicAttributes",
+      "sns:AddPermission",
+      "sns:RemovePermission",
+      "sns:DeleteTopic",
+      "sns:Subscribe",
+      "sns:ListSubscriptionsByTopic",
+      "sns:Publish",
+    ]);
+  });
+
+  it("ensureAlertTopic is safe to re-run against an existing topic", async () => {
+    snsMock.on(CreateTopicCommand).resolves({ TopicArn: TOPIC_ARN });
+    snsMock.on(SetTopicAttributesCommand).resolves({});
+    await ensureAlertTopic(CTX, TOPIC_NAME);
+    await ensureAlertTopic(CTX, TOPIC_NAME);
+    expect(snsMock.commandCalls(SetTopicAttributesCommand)).toHaveLength(2);
+    expect(
+      snsMock.commandCalls(SetTopicAttributesCommand)[1]?.args[0].input
+        .AttributeValue
+    ).toBe(
+      snsMock.commandCalls(SetTopicAttributesCommand)[0]?.args[0].input
+        .AttributeValue
+    );
   });
 
   it("subscribeEmail creates a subscription when none exists", async () => {

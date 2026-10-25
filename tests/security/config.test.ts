@@ -1,5 +1,7 @@
 import {
   ConfigServiceClient,
+  InsufficientDeliveryPolicyException,
+  InvalidRoleException,
   PutConfigurationRecorderCommand,
   PutDeliveryChannelCommand,
   StartConfigurationRecorderCommand,
@@ -86,6 +88,95 @@ describe("enableAwsConfig", () => {
     expect(
       configMock.commandCalls(StartConfigurationRecorderCommand)
     ).toHaveLength(1);
+  });
+
+  describe("when the role was just created", () => {
+    const roleNotPropagated = (): Error =>
+      new InsufficientDeliveryPolicyException({
+        message: `Insufficient delivery policy to s3 bucket: config-bucket-${ACCOUNT}, unable to assume role: ${ROLE_ARN}`,
+        $metadata: {},
+      });
+
+    beforeEach(() => {
+      iamMock.on(GetRoleCommand).rejects(new Error("NoSuchEntity"));
+      iamMock
+        .on(CreateRoleCommand)
+        .resolves({ Role: { Arn: ROLE_ARN } } as never);
+      iamMock.on(AttachRolePolicyCommand).resolves({});
+    });
+
+    it("retries recorder and delivery channel setup while IAM propagates", async () => {
+      configMock
+        .on(PutConfigurationRecorderCommand)
+        .rejectsOnce(
+          new InvalidRoleException({
+            message: "unable to assume role",
+            $metadata: {},
+          })
+        )
+        .resolves({});
+      configMock
+        .on(PutDeliveryChannelCommand)
+        .rejectsOnce(roleNotPropagated())
+        .resolves({});
+      const delay = vi.fn(async () => undefined);
+
+      await enableAwsConfig(CTX, ACCOUNT, delay);
+
+      expect(
+        configMock.commandCalls(PutConfigurationRecorderCommand)
+      ).toHaveLength(2);
+      expect(configMock.commandCalls(PutDeliveryChannelCommand)).toHaveLength(
+        2
+      );
+      expect(delay).toHaveBeenCalledTimes(2);
+      expect(
+        configMock.commandCalls(StartConfigurationRecorderCommand)
+      ).toHaveLength(1);
+    });
+
+    it("backs off with increasing delays and eventually gives up", async () => {
+      configMock.on(PutDeliveryChannelCommand).rejects(roleNotPropagated());
+      const delay = vi.fn(async () => undefined);
+
+      await expect(enableAwsConfig(CTX, ACCOUNT, delay)).rejects.toThrow(
+        /unable to assume role/
+      );
+
+      const waits = delay.mock.calls.map(([ms]) => ms as number);
+      expect(waits.length).toBeGreaterThan(1);
+      expect(waits).toEqual([...waits].sort((a, b) => a - b));
+      expect(configMock.commandCalls(PutDeliveryChannelCommand)).toHaveLength(
+        waits.length + 1
+      );
+    });
+
+    it("does not retry unrelated errors", async () => {
+      configMock
+        .on(PutDeliveryChannelCommand)
+        .rejects(new Error("NoSuchBucketException"));
+      const delay = vi.fn(async () => undefined);
+
+      await expect(enableAwsConfig(CTX, ACCOUNT, delay)).rejects.toThrow(
+        "NoSuchBucketException"
+      );
+      expect(delay).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not retry when the role already existed", async () => {
+    iamMock.on(GetRoleCommand).resolves({ Role: { Arn: ROLE_ARN } } as never);
+    configMock
+      .on(PutConfigurationRecorderCommand)
+      .rejects(
+        new InvalidRoleException({ message: "bad role", $metadata: {} })
+      );
+    const delay = vi.fn(async () => undefined);
+
+    await expect(enableAwsConfig(CTX, ACCOUNT, delay)).rejects.toThrow(
+      "bad role"
+    );
+    expect(delay).not.toHaveBeenCalled();
   });
 
   it("reuses an existing role", async () => {

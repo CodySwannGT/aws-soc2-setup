@@ -6,6 +6,7 @@ import {
   IAMClient,
   ListAccessKeysCommand,
   ListMFADevicesCommand,
+  ListOrganizationsFeaturesCommand,
   ListSigningCertificatesCommand,
 } from "@aws-sdk/client-iam";
 import {
@@ -125,6 +126,80 @@ describe("handleRemoveAccess", () => {
 
     expect(stsMock.commandCalls(AssumeRootCommand)).toHaveLength(1);
   });
+
+  it("reports SCP-restricted root concisely instead of raw AccessDenied text", async () => {
+    const writes: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+      writes.push(String(chunk));
+      return true;
+    });
+    orgMock.on(EnableAWSServiceAccessCommand).resolves({});
+    iamMock.on(ListOrganizationsFeaturesCommand).resolves({
+      EnabledFeatures: ["RootCredentialsManagement", "RootSessions"],
+    });
+    orgMock
+      .on(DescribeOrganizationCommand)
+      .resolves({ Organization: { MasterAccountId: "111111111111" } });
+    orgMock.on(ListAccountsCommand).resolves({
+      Accounts: [{ Id: "222222222222", Name: "Member", Status: "ACTIVE" }],
+    });
+    stsMock.on(AssumeRootCommand).resolves({
+      Credentials: {
+        AccessKeyId: "ASIA1",
+        SecretAccessKey: "secret",
+        SessionToken: "token",
+        Expiration: undefined,
+      },
+    });
+    const deny = new Error(
+      "User: arn:aws:sts::222222222222:root is not authorized to perform: iam:ListAccessKeys with an explicit deny in a service control policy: arn:aws:organizations::111111111111:policy/o-abc/service_control_policy/p-ctrestrict"
+    );
+    iamMock.on(ListAccessKeysCommand).rejects(deny);
+    iamMock.on(DeleteLoginProfileCommand).rejects(deny);
+    iamMock.on(ListSigningCertificatesCommand).rejects(deny);
+    iamMock.on(ListMFADevicesCommand).rejects(deny);
+
+    await handleRemoveAccess(globals({ yes: true }));
+
+    const output = writes.join("");
+    expect(output).toContain(
+      "Centralized root credentials management: enabled"
+    );
+    expect(output).toContain("Organizations root sessions: enabled");
+    expect(output).toContain(
+      "Member (222222222222): root credential removal incomplete; blocked by SCP p-ctrestrict"
+    );
+    expect(output).not.toContain("is not authorized to perform");
+    expect(output).not.toContain("Partial removal");
+    expect(output).toContain("root credential removal is incomplete");
+    expect(output).not.toContain("unusable");
+  });
+
+  it.each([
+    ["RootCredentialsManagement", ["RootSessions"]],
+    ["RootSessions", ["RootCredentialsManagement"]],
+  ] as const)(
+    "stops before processing members when %s stays disabled",
+    async (_missing, enabled) => {
+      orgMock.on(EnableAWSServiceAccessCommand).resolves({});
+      iamMock
+        .on(ListOrganizationsFeaturesCommand)
+        .resolves({ EnabledFeatures: [...enabled] });
+      iamMock
+        .on(EnableOrganizationsRootCredentialsManagementCommand)
+        .rejects(new Error("not the management account"));
+      iamMock
+        .on(EnableOrganizationsRootSessionsCommand)
+        .rejects(new Error("not the management account"));
+
+      await expect(
+        handleRemoveAccess(globals({ yes: true }))
+      ).rejects.toBeInstanceOf(CliError);
+
+      expect(orgMock.commandCalls(ListAccountsCommand)).toHaveLength(0);
+      expect(stsMock.commandCalls(AssumeRootCommand)).toHaveLength(0);
+    }
+  );
 });
 
 describe("registerRoot", () => {

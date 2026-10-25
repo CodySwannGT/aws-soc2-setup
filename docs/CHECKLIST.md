@@ -54,6 +54,7 @@ aws-soc2-setup setup --dry-run -p <profile>
 - [ ] `aws-soc2-setup sso assign ...` for the management account
 - [ ] Configure a local SSO profile for the admin user
 - [ ] `aws-soc2-setup root delete-keys --yes` (after admin access works)
+- [ ] Disable the **AWS Control Tower Admin** Identity Center user. When Control Tower sets up Identity Center it creates this user with the management account's root email. Once your own named admin user can sign in, disable (or delete) it in Identity Center so the root mailbox is not also an SSO login.
 
 ## Step 7 — Create the initial users group (manual)
 
@@ -82,10 +83,13 @@ aws-soc2-setup setup --dry-run -p <profile>
 ## Step 12 — Enable Control Tower controls (automated)
 
 - [ ] `aws-soc2-setup controltower enable-controls -o <ouId> ...`
+- [ ] Controls the landing zone already enforces (CloudTrail and AWS Config enablement) are reported as "already enforced by the landing zone". They are not failures.
+- [ ] Any control reported "not found in the AWS Control Catalog" is not offered in your region or landing zone. Record it as SKIPPED.
 
 ## Step 13 — Configure AWS Backup (automated)
 
-- [ ] `aws-soc2-setup backup -c <centralAccount> -a <adminAccount> ...`
+- [ ] `aws-soc2-setup backup -c <centralAccount> -a <adminAccount> ...`. `-a` is registered as the delegated Backup administrator. `-c` is granted use of the backup KMS key only when the command creates it; with `--kms-key`, configure that key's policy yourself.
+- [ ] The vault, plan, and selection are created in the account you run this from. Run `backup` in each workload account too, or manage AWS Organizations backup policies from the delegated administrator. For backup policies, the management account must also attach a resource-based delegation policy for that administrator, and the administrator's role needs the matching permissions.
 
 ## Step 14 — Configure audit and reporting (automated)
 
@@ -102,6 +106,7 @@ aws-soc2-setup setup --dry-run -p <profile>
 ## Step 16 — Provision additional accounts (optional / manual)
 
 - [ ] `aws-soc2-setup controltower provision-account ...` (use `--wait` as needed)
+- [ ] Sign in through Identity Center first, so the new account is granted to your own SSO user. Otherwise pass `--sso-email` for an existing named user. Never use the account's root email as the SSO user.
 - [ ] Re-run `security enable` for new accounts
 - [ ] Assign group access to new accounts
 
@@ -114,6 +119,8 @@ aws-soc2-setup setup --dry-run -p <profile>
 
 - [ ] Review member accounts (`aws-soc2-setup status`)
 - [ ] `aws-soc2-setup root remove-access --yes`
+- [ ] Prefer running this **before** step 12. `enable-controls` turns on AWS-GR_RESTRICT_ROOT_USER, an SCP that denies even centralized root sessions. After that, accounts are reported as "root credential removal incomplete; blocked by SCP <id>": existing root credentials remain and cannot be deleted.
+- [ ] Confirm the output shows `Centralized root credentials management: enabled` and `Organizations root sessions: enabled`.
 
 ## Step 19 — Configure KMS key management (optional / manual)
 

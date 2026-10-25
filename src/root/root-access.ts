@@ -4,8 +4,6 @@ import {
   DeleteLoginProfileCommand,
   DeleteSigningCertificateCommand,
   DeleteVirtualMFADeviceCommand,
-  EnableOrganizationsRootCredentialsManagementCommand,
-  EnableOrganizationsRootSessionsCommand,
   IAMClient,
   ListAccessKeysCommand,
   ListMFADevicesCommand,
@@ -13,14 +11,12 @@ import {
 } from "@aws-sdk/client-iam";
 import {
   DescribeOrganizationCommand,
-  EnableAWSServiceAccessCommand,
   ListAccountsCommand,
   OrganizationsClient,
 } from "@aws-sdk/client-organizations";
 import { AssumeRootCommand, STSClient } from "@aws-sdk/client-sts";
 
 import { buildClientConfig } from "../lib/aws.js";
-import { warn } from "../lib/logger.js";
 import { collectPaged } from "../lib/paginate.js";
 
 import type { RootContext } from "./access-keys.js";
@@ -37,52 +33,11 @@ export interface MemberAccount {
 const orgClient = (context: RootContext): OrganizationsClient =>
   new OrganizationsClient(buildClientConfig(context));
 
-const iamClient = (context: RootContext): IAMClient =>
-  new IAMClient(buildClientConfig(context));
-
 const stsClient = (context: RootContext): STSClient =>
   new STSClient(buildClientConfig(context));
 
-const tryEnable = async (
-  op: () => Promise<unknown>,
-  label: string
-): Promise<void> => {
-  try {
-    await op();
-  } catch {
-    warn(`${label} is already enabled or could not be enabled`);
-  }
-};
-
-/**
- * Enable the three organization-level root-management features (best-effort).
- * @param context - AWS region/profile context.
- */
-export const enableRootManagement = async (
-  context: RootContext
-): Promise<void> => {
-  await tryEnable(
-    () =>
-      orgClient(context).send(
-        new EnableAWSServiceAccessCommand({
-          ServicePrincipal: "iam.amazonaws.com",
-        })
-      ),
-    "IAM trusted access"
-  );
-  await tryEnable(
-    () =>
-      iamClient(context).send(
-        new EnableOrganizationsRootCredentialsManagementCommand({})
-      ),
-    "Root credentials management"
-  );
-  await tryEnable(
-    () =>
-      iamClient(context).send(new EnableOrganizationsRootSessionsCommand({})),
-    "Organizations root sessions"
-  );
-};
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
 /**
  * List active member accounts excluding the management account.
@@ -119,16 +74,46 @@ interface TempCredentials {
   sessionToken: string;
 }
 
-/** What was cleared (and what failed) when removing an account's root credentials. */
+/**
+ * What was cleared, what failed, and which SCPs explicitly denied the root
+ * session when removing an account's root credentials.
+ */
 export interface RootRemovalResult {
   cleared: string[];
   failures: string[];
+  blockedBy: string[];
 }
 
-const EMPTY_RESULT: RootRemovalResult = { cleared: [], failures: [] };
+const EMPTY_RESULT: RootRemovalResult = {
+  cleared: [],
+  failures: [],
+  blockedBy: [],
+};
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
+const SCP_DENY = /explicit deny in a service control policy(?::\s*(\S+))?/i;
+
+/**
+ * Extract the denying SCP id (`p-...`) from an AccessDenied message, e.g. the
+ * Control Tower AWS-GR_RESTRICT_ROOT_USER guardrail, which denies even
+ * AssumeRoot sessions.
+ * @param error - The caught error.
+ * @returns The policy id, "an unnamed SCP", or undefined if not an SCP deny.
+ */
+const scpDenyPolicy = (error: unknown): string | undefined => {
+  const match = SCP_DENY.exec(errorMessage(error));
+  if (!match) {
+    return undefined;
+  }
+  return match[1]?.split("/").at(-1) ?? "an unnamed SCP";
+};
+
+const failed = (label: string, error: unknown): RootRemovalResult => {
+  const policy = scpDenyPolicy(error);
+  if (policy) {
+    return { ...EMPTY_RESULT, blockedBy: [policy] };
+  }
+  return { ...EMPTY_RESULT, failures: [`${label}: ${errorMessage(error)}`] };
+};
 
 const isMissingEntity = (error: unknown): boolean =>
   /NoSuchEntity|cannot be found|does not exist/i.test(errorMessage(error));
@@ -139,6 +124,7 @@ const merge = (
 ): RootRemovalResult => ({
   cleared: [...a.cleared, ...b.cleared],
   failures: [...a.failures, ...b.failures],
+  blockedBy: [...new Set([...a.blockedBy, ...b.blockedBy])],
 });
 
 const tryClear = async (
@@ -147,12 +133,12 @@ const tryClear = async (
 ): Promise<RootRemovalResult> => {
   try {
     await op();
-    return { cleared: [label], failures: [] };
+    return { ...EMPTY_RESULT, cleared: [label] };
   } catch (error) {
     if (isMissingEntity(error)) {
       return EMPTY_RESULT;
     }
-    return { cleared: [], failures: [`${label}: ${errorMessage(error)}`] };
+    return failed(label, error);
   }
 };
 
@@ -178,12 +164,7 @@ const listOrFail = async <T>(
   try {
     return { value: await op() };
   } catch (error) {
-    return {
-      failure: {
-        cleared: [],
-        failures: [`${label}: ${errorMessage(error)}`],
-      },
-    };
+    return { failure: failed(label, error) };
   }
 };
 

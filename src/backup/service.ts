@@ -176,22 +176,22 @@ export const createBackupSelection = async (
 };
 
 /**
- * Register the central account as a delegated administrator for AWS Backup.
+ * Register an account as the delegated administrator for AWS Backup.
  * Returns false rather than throwing when the call is rejected (expected unless
  * run from the Organizations management account).
  * @param context - AWS region/profile context.
- * @param centralAccount - The central backup account id.
+ * @param adminAccount - The account to register as delegated administrator.
  * @returns True if registration succeeded.
  */
 export const registerBackupAdministrator = async (
   context: BackupContext,
-  centralAccount: string
+  adminAccount: string
 ): Promise<boolean> => {
   try {
     await new OrganizationsClient(buildClientConfig(context)).send(
       new RegisterDelegatedAdministratorCommand({
         ServicePrincipal: BACKUP_SERVICE_PRINCIPAL,
-        AccountId: centralAccount,
+        AccountId: adminAccount,
       })
     );
     return true;

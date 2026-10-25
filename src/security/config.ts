@@ -14,6 +14,7 @@ import {
 import { buildClientConfig } from "../lib/aws.js";
 import type { GlobalOptions } from "../lib/config.js";
 import { info, success, warn } from "../lib/logger.js";
+import { realDelay, retryWithBackoff, type DelayFn } from "../lib/retry.js";
 import {
   ensureEncryptedBucket,
   putBucketPolicy,
@@ -30,6 +31,17 @@ const CONFIG_PREFIX = "config";
 const CONFIG_RECORDER_NAME = "default";
 const CONFIG_SERVICE_PRINCIPAL = "config.amazonaws.com";
 const POLICY_VERSION = "2012-10-17";
+
+/**
+ * Backoff (ms) while a freshly created IAM role propagates to AWS Config.
+ * IAM is eventually consistent; ~95s total comfortably covers typical lag.
+ */
+const ROLE_PROPAGATION_BACKOFF_MS = [5_000, 10_000, 20_000, 30_000, 30_000];
+const ROLE_PROPAGATION_ERRORS = new Set([
+  "InsufficientDeliveryPolicyException",
+  "InvalidRoleException",
+]);
+const ROLE_NOT_ASSUMABLE = /unable to assume role/i;
 
 const CONFIG_TRUST_POLICY = JSON.stringify({
   Version: POLICY_VERSION,
@@ -127,7 +139,15 @@ const getConfigRoleArn = async (
   }
 };
 
-const createConfigRole = async (context: SecurityContext): Promise<string> => {
+/** The AWS Config role ARN and whether this run just created it. */
+interface ConfigRole {
+  arn: string;
+  created: boolean;
+}
+
+const createConfigRole = async (
+  context: SecurityContext
+): Promise<ConfigRole> => {
   const result = await iamClient(context).send(
     new CreateRoleCommand({
       RoleName: CONFIG_ROLE_NAME,
@@ -141,48 +161,72 @@ const createConfigRole = async (context: SecurityContext): Promise<string> => {
     })
   );
   if (!result.Role?.Arn) {
-    return "";
+    return { arn: "", created: true };
   }
   success(`Created IAM role for AWS Config: ${result.Role.Arn}`);
-  return result.Role.Arn;
+  return { arn: result.Role.Arn, created: true };
 };
 
-const ensureConfigRole = async (context: SecurityContext): Promise<string> => {
+const ensureConfigRole = async (
+  context: SecurityContext
+): Promise<ConfigRole> => {
   const existing = await getConfigRoleArn(context);
   if (existing) {
     info(`Using existing IAM role for AWS Config: ${existing}`);
-    return existing;
+    return { arn: existing, created: false };
   }
   return createConfigRole(context);
 };
 
+const isRolePropagationError = (caught: unknown): boolean =>
+  caught instanceof Error &&
+  (ROLE_PROPAGATION_ERRORS.has(caught.name) ||
+    ROLE_NOT_ASSUMABLE.test(caught.message));
+
 const startRecording = async (
   context: SecurityContext,
   bucket: string,
-  roleArn: string
+  role: ConfigRole,
+  delay: DelayFn
 ): Promise<void> => {
   const client = configClient(context);
-  await client.send(
-    new PutConfigurationRecorderCommand({
-      ConfigurationRecorder: {
-        name: CONFIG_RECORDER_NAME,
-        roleARN: roleArn,
-        recordingGroup: {
-          allSupported: true,
-          includeGlobalResourceTypes: true,
+  // A just-created role can take a while to become assumable by AWS Config,
+  // so only then retry the calls that make Config assume it.
+  const backoff = role.created ? ROLE_PROPAGATION_BACKOFF_MS : [];
+  const shouldRetry = (caught: unknown): boolean => {
+    const retryable = isRolePropagationError(caught);
+    if (retryable) {
+      info("Waiting for the new AWS Config IAM role to propagate...");
+    }
+    return retryable;
+  };
+  const untilRolePropagates = <T>(op: () => Promise<T>): Promise<T> =>
+    retryWithBackoff(op, shouldRetry, backoff, delay);
+  await untilRolePropagates(() =>
+    client.send(
+      new PutConfigurationRecorderCommand({
+        ConfigurationRecorder: {
+          name: CONFIG_RECORDER_NAME,
+          roleARN: role.arn,
+          recordingGroup: {
+            allSupported: true,
+            includeGlobalResourceTypes: true,
+          },
         },
-      },
-    })
+      })
+    )
   );
-  await client.send(
-    new PutDeliveryChannelCommand({
-      DeliveryChannel: {
-        name: CONFIG_RECORDER_NAME,
-        s3BucketName: bucket,
-        s3KeyPrefix: CONFIG_PREFIX,
-        configSnapshotDeliveryProperties: { deliveryFrequency: "One_Hour" },
-      },
-    })
+  await untilRolePropagates(() =>
+    client.send(
+      new PutDeliveryChannelCommand({
+        DeliveryChannel: {
+          name: CONFIG_RECORDER_NAME,
+          s3BucketName: bucket,
+          s3KeyPrefix: CONFIG_PREFIX,
+          configSnapshotDeliveryProperties: { deliveryFrequency: "One_Hour" },
+        },
+      })
+    )
   );
   await client.send(
     new StartConfigurationRecorderCommand({
@@ -195,19 +239,23 @@ const startRecording = async (
 /**
  * Enable AWS Config: create an encrypted delivery bucket and policy, ensure the
  * AWS Config IAM role, then configure and start the recorder and delivery
- * channel.
+ * channel. When the role is created by this run, recorder and delivery-channel
+ * setup is retried with backoff while IAM propagates the new role.
  * @param context - AWS region/profile context.
  * @param accountId - The account being configured.
+ * @param delay - Delay implementation for propagation backoff (injectable for
+ * tests).
  */
 export const enableAwsConfig = async (
   context: SecurityContext,
-  accountId: string
+  accountId: string,
+  delay: DelayFn = realDelay
 ): Promise<void> => {
   const bucket = await ensureConfigBucket(context, accountId);
-  const roleArn = await ensureConfigRole(context);
-  if (!roleArn) {
+  const role = await ensureConfigRole(context);
+  if (!role.arn) {
     warn("Could not resolve AWS Config role; skipping recorder setup");
     return;
   }
-  await startRecording(context, bucket, roleArn);
+  await startRecording(context, bucket, role, delay);
 };

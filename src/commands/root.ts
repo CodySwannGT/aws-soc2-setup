@@ -1,26 +1,26 @@
 import type { Command } from "commander";
 
-import { resolveGlobalOptions, type GlobalFlags } from "../lib/config.js";
+import {
+  requireConfirmation,
+  resolveGlobalOptions,
+  type GlobalFlags,
+} from "../lib/config.js";
 import type { GlobalOptions } from "../lib/config.js";
 import { CliError } from "../lib/errors.js";
 import { info, success, warn } from "../lib/logger.js";
 import { runAction } from "../lib/run.js";
 import { deleteAccessKey, listRootAccessKeyIds } from "../root/access-keys.js";
 import {
-  enableRootManagement,
   listMemberAccounts,
   removeRootCredentials,
   type MemberAccount,
   type RootRemovalResult,
 } from "../root/root-access.js";
-
-const requireYes = (globals: GlobalOptions, action: string): void => {
-  if (!globals.yes) {
-    throw new CliError(
-      `Refusing to ${action} without confirmation. Re-run with --yes to proceed.`
-    );
-  }
-};
+import {
+  enableRootManagement,
+  type FeatureStatus,
+  type RootManagementStatus,
+} from "../root/root-features.js";
 
 const deleteKeys = async (
   globals: GlobalOptions,
@@ -45,7 +45,7 @@ export const handleDeleteKeys = async (
     info(`[dry-run] Would delete ${keyIds.length} root access key(s)`);
     return;
   }
-  requireYes(globals, "delete root access keys");
+  requireConfirmation(globals, "delete root access keys");
   if (keyIds.length === 0) {
     info("No access keys found for the root user");
     return;
@@ -53,14 +53,32 @@ export const handleDeleteKeys = async (
   await deleteKeys(globals, keyIds);
 };
 
+const RESTRICT_ROOT_HINT =
+  "An SCP (typically Control Tower's AWS-GR_RESTRICT_ROOT_USER guardrail) " +
+  "denied the credential-cleanup actions, so root credential removal is " +
+  "incomplete in those accounts and any existing root credentials remain. " +
+  "To delete them, run `root remove-access` before enabling that control.";
+
+/**
+ * Report one account's removal result.
+ * @param result - The removal result, or undefined if assume-root failed.
+ * @param account - The member account.
+ * @returns True when an SCP explicitly denied the root session.
+ */
 const reportRemoval = (
   result: RootRemovalResult | undefined,
   account: MemberAccount
-): void => {
+): boolean => {
   const where = `${account.name} (${account.id})`;
   if (!result) {
     warn(`Could not assume a root session for ${where}`);
-    return;
+    return false;
+  }
+  const blocked = result.blockedBy.length > 0;
+  if (blocked) {
+    info(
+      `${where}: root credential removal incomplete; blocked by SCP ${result.blockedBy.join(", ")}`
+    );
   }
   if (result.failures.length > 0) {
     warn(`Partial removal for ${where}: ${result.failures.join("; ")}`);
@@ -69,10 +87,29 @@ const reportRemoval = (
     success(
       `Removed root credentials from ${where}: ${result.cleared.join(", ")}`
     );
-    return;
+    return blocked;
   }
-  if (result.failures.length === 0) {
+  if (result.failures.length === 0 && !blocked) {
     info(`No root credentials present in ${where}`);
+  }
+  return blocked;
+};
+
+const removeFromOne = async (
+  globals: GlobalOptions,
+  account: MemberAccount
+): Promise<boolean> => {
+  try {
+    return reportRemoval(
+      await removeRootCredentials(globals, account.id),
+      account
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    warn(
+      `Failed to remove root credentials for ${account.name} (${account.id}): ${message}`
+    );
+    return false;
   }
 };
 
@@ -80,22 +117,47 @@ const removeFromAll = async (
   globals: GlobalOptions,
   accounts: MemberAccount[]
 ): Promise<void> => {
-  for (const account of accounts) {
-    try {
-      reportRemoval(await removeRootCredentials(globals, account.id), account);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      warn(
-        `Failed to remove root credentials for ${account.name} (${account.id}): ${message}`
-      );
-    }
+  const blocked = await accounts.reduce<Promise<boolean[]>>(
+    async (accPromise, account) => [
+      ...(await accPromise),
+      await removeFromOne(globals, account),
+    ],
+    Promise.resolve([])
+  );
+  if (blocked.some(Boolean)) {
+    info(RESTRICT_ROOT_HINT);
+  }
+};
+
+const reportFeature = (label: string, status: FeatureStatus): void => {
+  if (status.enabled) {
+    success(`${label}: enabled`);
+    return;
+  }
+  warn(`${label}: not enabled (${status.reason ?? "unknown reason"})`);
+};
+
+const requireRootFeatures = (features: RootManagementStatus): void => {
+  if (
+    !features.RootCredentialsManagement.enabled ||
+    !features.RootSessions.enabled
+  ) {
+    throw new CliError(
+      "Centralized root access requires both RootCredentialsManagement and RootSessions to be enabled; no member accounts were processed. Run from the Organizations management account and retry."
+    );
   }
 };
 
 const prepareAndListMembers = async (
   globals: GlobalOptions
 ): Promise<MemberAccount[]> => {
-  await enableRootManagement(globals);
+  const features = await enableRootManagement(globals);
+  reportFeature(
+    "Centralized root credentials management",
+    features.RootCredentialsManagement
+  );
+  reportFeature("Organizations root sessions", features.RootSessions);
+  requireRootFeatures(features);
   return listMemberAccounts(globals);
 };
 
@@ -120,7 +182,7 @@ export const handleRemoveAccess = async (
     info("[dry-run] Would remove root credentials from all member accounts");
     return;
   }
-  requireYes(globals, "remove root access org-wide");
+  requireConfirmation(globals, "remove root access org-wide");
   await runRemoveAccess(globals);
 };
 

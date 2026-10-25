@@ -3,7 +3,7 @@ import { mockClient } from "aws-sdk-client-mock";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { CliError } from "../../src/lib/errors.js";
-import { getCallerIdentity } from "../../src/lib/sts.js";
+import { getCallerIdentity, ssoSessionName } from "../../src/lib/sts.js";
 
 const stsMock = mockClient(STSClient);
 
@@ -33,5 +33,24 @@ describe("getCallerIdentity", () => {
     await expect(getCallerIdentity({ region: REGION })).rejects.toBeInstanceOf(
       CliError
     );
+  });
+});
+
+describe("ssoSessionName", () => {
+  it("extracts the session name from an Identity Center role session", () => {
+    expect(
+      ssoSessionName(
+        "arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_AdministratorAccess_0123abcd/cody@example.com"
+      )
+    ).toBe("cody@example.com");
+  });
+
+  it("returns undefined for non-SSO principals", () => {
+    expect(ssoSessionName(ARN)).toBeUndefined();
+    expect(
+      ssoSessionName(
+        "arn:aws:sts::123456789012:assumed-role/OrganizationAccountAccessRole/ci"
+      )
+    ).toBeUndefined();
   });
 });

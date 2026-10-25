@@ -38,6 +38,22 @@ const snsClient = (context: AlertContext): SNSClient =>
 const eventsClient = (context: AlertContext): EventBridgeClient =>
   new EventBridgeClient(buildClientConfig(context));
 
+/**
+ * Topic-scoped actions granted to the owning account. SNS topic policies
+ * reject `sns:*` ("Policy statement action out of service scope!"), so the
+ * owner's access is spelled out explicitly.
+ */
+const TOPIC_OWNER_ACTIONS = [
+  "sns:GetTopicAttributes",
+  "sns:SetTopicAttributes",
+  "sns:AddPermission",
+  "sns:RemovePermission",
+  "sns:DeleteTopic",
+  "sns:Subscribe",
+  "sns:ListSubscriptionsByTopic",
+  "sns:Publish",
+];
+
 const topicPolicy = (topicArn: string): string => {
   const accountId = topicArn.split(":")[4];
   return JSON.stringify({
@@ -47,7 +63,7 @@ const topicPolicy = (topicArn: string): string => {
         Sid: "AllowAccountOwner",
         Effect: "Allow",
         Principal: { AWS: `arn:aws:iam::${accountId}:root` },
-        Action: "sns:*",
+        Action: TOPIC_OWNER_ACTIONS,
         Resource: topicArn,
       },
       {

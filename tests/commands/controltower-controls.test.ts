@@ -1,6 +1,11 @@
 import {
+  ControlCatalogClient,
+  ListControlsCommand,
+} from "@aws-sdk/client-controlcatalog";
+import {
   ControlTowerClient,
   EnableControlCommand,
+  ValidationException,
 } from "@aws-sdk/client-controltower";
 import {
   DescribeOrganizationCommand,
@@ -25,6 +30,7 @@ const stsMock = mockClient(STSClient);
 const orgMock = mockClient(OrganizationsClient);
 const ctMock = mockClient(ControlTowerClient);
 const hubMock = mockClient(SecurityHubClient);
+const catalogMock = mockClient(ControlCatalogClient);
 
 const OU = "ou-abcd-12345678";
 
@@ -59,6 +65,10 @@ describe("handleEnableControls", () => {
     orgMock.reset();
     ctMock.reset();
     hubMock.reset();
+    catalogMock.reset();
+    catalogMock.on(ListControlsCommand).resolves({
+      Controls: [{ Arn: "arn:aws:controlcatalog:::control/opaque" } as never],
+    });
     primeIdentityAndOrg();
     vi.spyOn(process.stdout, "write").mockReturnValue(true);
   });
@@ -88,6 +98,37 @@ describe("handleEnableControls", () => {
     ctMock.on(EnableControlCommand).resolves({});
     await handleEnableControls(globals(), options());
     expect(ctMock.commandCalls(EnableControlCommand).length).toBeGreaterThan(0);
+  });
+
+  it("reports landing-zone enforced controls separately from failures", async () => {
+    const writes: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+      writes.push(String(chunk));
+      return true;
+    });
+    ctMock.on(EnableControlCommand).resolves({});
+
+    await handleEnableControls(
+      globals(),
+      options({ soc2Type: "type2", baseline: "recommended" })
+    );
+
+    const output = writes.join("");
+    expect(output).toContain("already enforced by the landing zone");
+    expect(output).toContain("0 failed");
+  });
+
+  it("does not fall back to Security Hub when controls are only enforced", async () => {
+    ctMock.on(EnableControlCommand).rejects(
+      new ValidationException({
+        message: "Control is enforced by default and cannot be enabled",
+        $metadata: {},
+      })
+    );
+
+    await handleEnableControls(globals(), options({ alternative: true }));
+
+    expect(hubMock.commandCalls(EnableSecurityHubCommand)).toHaveLength(0);
   });
 
   it("falls back to Security Hub when all controls fail and -a is set", async () => {

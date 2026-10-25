@@ -37,3 +37,14 @@ export const getCallerIdentity = async (
     userId: result.UserId,
   };
 };
+
+const SSO_ROLE_SESSION = /:assumed-role\/AWSReservedSSO_[^/]+\/(.+)$/;
+
+/**
+ * Extract the Identity Center user name from an SSO permission-set role
+ * session ARN (`...:assumed-role/AWSReservedSSO_<set>_<hash>/<user>`).
+ * @param arn - The caller ARN from STS.
+ * @returns The session (user) name, or undefined for non-SSO principals.
+ */
+export const ssoSessionName = (arn: string): string | undefined =>
+  SSO_ROLE_SESSION.exec(arn)?.[1];
