@@ -91,6 +91,7 @@ describe("buildDenyIamUsersPolicy", () => {
       NotResource: [SCOPED.userArn],
       Condition: {
         ArnLike: { "aws:PrincipalArn": SCOPED.principalArnPattern },
+        ArnNotLike: { "aws:PrincipalArn": [BREAK_GLASS] },
       },
     });
     expect(scoped?.Resource).toBeUndefined();
@@ -125,6 +126,20 @@ describe("buildDenyIamUsersPolicy", () => {
     ).toEqual([SCOPED.principalArnPattern]);
   });
 
+  it("keeps a principal exempted by --exempt-arn fully exempt from its scoped deny", () => {
+    const document = parseDocument(
+      buildDenyIamUsersPolicy([SCOPED.principalArnPattern], [SCOPED])
+    );
+    expect(
+      document.Statement[1]?.Condition?.ArnNotLike?.["aws:PrincipalArn"]
+    ).toEqual([SCOPED.principalArnPattern]);
+  });
+
+  it("omits ArnNotLike from the scoped deny when nothing is exempted entirely", () => {
+    const document = parseDocument(buildDenyIamUsersPolicy([], [SCOPED]));
+    expect(document.Statement[1]?.Condition?.ArnNotLike).toBeUndefined();
+  });
+
   it("stays within the AWS SCP size limit for a handful of exemptions", () => {
     const content = buildDenyIamUsersPolicy([BREAK_GLASS], [SCOPED]);
     expect(content.length).toBeLessThanOrEqual(SCP_MAX_CHARACTERS);
@@ -137,8 +152,29 @@ describe("buildDenyIamUsersPolicy", () => {
     }));
     expect(() => buildDenyIamUsersPolicy([], many)).toThrow(CliError);
     expect(() => buildDenyIamUsersPolicy([], many)).toThrow(
-      /over the 5120-character AWS limit/
+      /over this command's 5120-character limit/
     );
+  });
+
+  it.each([
+    "arn:aws:iam::123456789012:",
+    "arn:aws:iam::invalid:role/x",
+    "arn:aws:iam::123456789012:role/",
+    "arn:aws:iam::12345:role/x",
+    "arn:aws:sts::123456789012:assumed-role/x/y",
+  ])("rejects the malformed principal pattern %s", principalArnPattern => {
+    expect(() =>
+      buildDenyIamUsersPolicy([], [{ ...SCOPED, principalArnPattern }])
+    ).toThrow(CliError);
+  });
+
+  it("accepts a wildcard-account principal pattern", () => {
+    expect(() =>
+      buildDenyIamUsersPolicy(
+        [],
+        [{ ...SCOPED, principalArnPattern: "arn:aws:iam::*:role/deployer-*" }]
+      )
+    ).not.toThrow();
   });
 
   it("rejects invalid scoped exemptions passed to the builder", () => {

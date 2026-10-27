@@ -29,7 +29,11 @@ export const DENIED_IAM_EVENT_NAMES = DENIED_IAM_ACTIONS.map(
   action => action.split(":")[1] ?? action
 );
 
-/** AWS Organizations' maximum SCP document size, in characters. */
+/**
+ * This command's own ceiling on the SCP document size, in characters. AWS
+ * Organizations now accepts up to 10,240; 5,120 is deliberately conservative
+ * so the policy stays small and reviewable.
+ */
 export const SCP_MAX_CHARACTERS = 5120;
 
 /**
@@ -46,7 +50,11 @@ export const SCOPED_EXEMPTION_SID_PREFIX = "DenyScopedExemptionOutsideItsUser";
 
 const USER_ARN_PATTERN =
   /^arn:aws:iam::\d{12}:user\/(?:[\w+=,.@-]+\/)*[\w+=,.@-]+$/;
-const PRINCIPAL_ARN_PATTERN = /^arn:aws:iam::[^\s=]+$/;
+// A 12-digit account (or `*`), a principal type, and a non-empty name. A
+// malformed pattern would match no principal, silently leaving the scoped
+// exemption ineffective while the main deny still applied.
+const PRINCIPAL_ARN_PATTERN =
+  /^arn:aws:iam::(?:\d{12}|\*):(?:role|user|root)(?:\/[^\s=]+)?$/;
 
 /**
  * Validate a scoped exemption: the user must be one concrete IAM user ARN (no
@@ -96,24 +104,29 @@ const exemptionCondition = (
     ? {}
     : { Condition: { ArnNotLike: { "aws:PrincipalArn": [...exemptArns] } } };
 
-const scopedExemptionStatement = (
-  exemption: ScopedUserExemption,
-  index: number
-): Record<string, unknown> => ({
-  Sid: `${SCOPED_EXEMPTION_SID_PREFIX}${index + 1}`,
-  Effect: "Deny",
-  Action: [...DENIED_IAM_ACTIONS],
-  NotResource: [exemption.userArn],
-  Condition: {
-    ArnLike: { "aws:PrincipalArn": exemption.principalArnPattern },
-  },
-});
+// Principals already exempted entirely by --exempt-arn must stay exempt: the
+// scoped deny skips them, or it would narrow a principal-wide exemption.
+const scopedExemptionStatement =
+  (exemptArns: readonly string[]) =>
+  (exemption: ScopedUserExemption, index: number): Record<string, unknown> => ({
+    Sid: `${SCOPED_EXEMPTION_SID_PREFIX}${index + 1}`,
+    Effect: "Deny",
+    Action: [...DENIED_IAM_ACTIONS],
+    NotResource: [exemption.userArn],
+    Condition: {
+      ArnLike: { "aws:PrincipalArn": exemption.principalArnPattern },
+      ...(exemptArns.length === 0
+        ? {}
+        : { ArnNotLike: { "aws:PrincipalArn": [...exemptArns] } }),
+    },
+  });
 
 const assertWithinScpLimit = (content: string): string => {
   if (content.length > SCP_MAX_CHARACTERS) {
     throw new CliError(
       `The ${DENY_IAM_USERS_POLICY_NAME} SCP would be ${content.length} ` +
-        `characters, over the ${SCP_MAX_CHARACTERS}-character AWS limit. ` +
+        `characters, over this command's ${SCP_MAX_CHARACTERS}-character ` +
+        "limit (AWS allows 10,240; the tool keeps SCPs smaller on purpose). " +
         "Use fewer or broader --exempt-arn / --exempt-user exemptions."
     );
   }
@@ -157,7 +170,7 @@ export const buildDenyIamUsersPolicy = (
             Resource: "*",
             ...exemptionCondition(excluded),
           },
-          ...validated.map(scopedExemptionStatement),
+          ...validated.map(scopedExemptionStatement(exemptArns)),
         ],
       },
       undefined,

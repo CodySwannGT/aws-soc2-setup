@@ -146,9 +146,9 @@ aws-soc2-setup --yes scp deny-iam-users \
   --exempt-user 'arn:aws:iam::111111111111:role/deployer=arn:aws:iam::111111111111:user/ci-bot'
 ```
 
-Each scoped exemption removes its principal from the main statement's `ArnNotLike aws:PrincipalArn` list. It then adds a statement, `DenyScopedExemptionOutsideItsUser<N>`, that denies the same actions to that principal on `NotResource: [<userArn>]`. All five actions take the IAM `user` ARN as their resource, so the scope covers every one of them. The user ARN must be concrete (`arn:aws:iam::<12-digit account>:user/[path/]name`, with no wildcards), and its path must match the user's real path. The principal must be an `arn:aws:iam::` ARN or pattern.
+Each scoped exemption removes its principal from the main statement's `ArnNotLike aws:PrincipalArn` list. It then adds a statement, `DenyScopedExemptionOutsideItsUser<N>`, that denies the same actions to that principal on `NotResource: [<userArn>]`. All five actions take the IAM `user` ARN as their resource, so the scope covers every one of them. The user ARN must be concrete (`arn:aws:iam::<12-digit account>:user/[path/]name`, with no wildcards), and its path must match the user's real path. The principal must be an `arn:aws:iam::<12-digit account or *>:role|user|root[/name]` ARN or pattern. A principal that `--exempt-arn` already exempts entirely stays fully exempt; the scoped statement skips it.
 
-The command fails before it calls AWS if the exemptions would push the SCP past the 5,120-character limit. Re-running the command updates the existing policy in place whenever its content has changed.
+The command fails before it calls AWS if the exemptions would push the SCP past its 5,120-character limit (a deliberately conservative tool limit; AWS itself allows 10,240). Re-running the command updates the existing policy in place whenever its content has changed.
 
 ## Setup plan
 
