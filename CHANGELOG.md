@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [2.1.0](https://github.com/CodySwannGT/aws-soc2-setup/compare/v2.0.0...v2.1.0) (2026-10-27)
+
+
+### Features
+
+* **scp:** add resource-scoped --exempt-user exemption to deny-iam-users ([ec248cd](https://github.com/CodySwannGT/aws-soc2-setup/commit/ec248cd0620088f2f8fee1e3a1af9d1a95e4876f)), closes [CodySwannGT/aws-soc2-setup#33](https://github.com/CodySwannGT/aws-soc2-setup/issues/33) [CodySwannGT/aws-soc2-setup#33](https://github.com/CodySwannGT/aws-soc2-setup/issues/33)
+
+
+### Bug Fixes
+
+* **scp:** tighten scoped-exemption validation and keep exempt-arn principals whole ([fe90c64](https://github.com/CodySwannGT/aws-soc2-setup/commit/fe90c64de9c2841cc14a3276827aa391db98ffae)), closes [#34](https://github.com/CodySwannGT/aws-soc2-setup/issues/34) [CodySwannGT/aws-soc2-setup#33](https://github.com/CodySwannGT/aws-soc2-setup/issues/33) [CodySwannGT/aws-soc2-setup#33](https://github.com/CodySwannGT/aws-soc2-setup/issues/33)
+
 ## [2.0.0](https://github.com/CodySwannGT/aws-soc2-setup/compare/v1.1.5...v2.0.0) (2026-10-25)
 
 
