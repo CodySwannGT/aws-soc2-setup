@@ -155,6 +155,64 @@ describe("handleAlertManagement", () => {
   });
 });
 
+describe("scp deny-iam-users --exempt-user parsing", () => {
+  const ROLE = "arn:aws:iam::111111111111:role/deployer";
+  const USER = "arn:aws:iam::111111111111:user/ci-bot";
+  const OTHER_ROLE = "arn:aws:iam::111111111111:role/other";
+  const OTHER_USER = "arn:aws:iam::111111111111:user/svc/other-bot";
+  const FLAG = "--exempt-user";
+  const originalExitCode = process.exitCode;
+
+  const run = async (...args: string[]): Promise<string> => {
+    const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    await buildProgram().parseAsync([
+      "node",
+      "aws-soc2-setup",
+      "--dry-run",
+      "scp",
+      "deny-iam-users",
+      ...args,
+    ]);
+    return out.mock.calls.map(call => String(call[0])).join("");
+  };
+
+  beforeEach(() => {
+    orgMock.reset();
+    process.exitCode = undefined;
+  });
+
+  afterEach(() => {
+    process.exitCode = originalExitCode;
+    vi.restoreAllMocks();
+  });
+
+  it("parses a repeated principal=userArn into scoped statements", async () => {
+    const written = await run(
+      FLAG,
+      `${ROLE}=${USER}`,
+      FLAG,
+      `${OTHER_ROLE}=${OTHER_USER}`
+    );
+    expect(process.exitCode).toBeUndefined();
+    expect(written).toContain("DenyScopedExemptionOutsideItsUser1");
+    expect(written).toContain("DenyScopedExemptionOutsideItsUser2");
+    expect(written).toContain(`"${USER}"`);
+    expect(written).toContain(`"${OTHER_USER}"`);
+    expect(orgMock.commandCalls(CreatePolicyCommand)).toHaveLength(0);
+  });
+
+  it("rejects a value without the principal=userArn separator", async () => {
+    await run(FLAG, ROLE);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("rejects a wildcard user ARN", async () => {
+    await run(FLAG, `${ROLE}=arn:aws:iam::111111111111:user/*`);
+    expect(process.exitCode).toBe(1);
+  });
+});
+
 describe("registerScp", () => {
   it("registers the scp command group with both subcommands", () => {
     const scp = buildProgram().commands.find(
