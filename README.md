@@ -129,10 +129,26 @@ You can put global options before or after the subcommand. `aws-soc2-setup root 
 | `backup` | Configure AWS Backup in the **caller's** account (vault, plan, selection); register `--admin-account` as delegated admin |
 | `kms` | Manage key administrators and rotation |
 | `root delete-keys` / `remove-access` | Root key deletion and org-wide root lockdown (`--yes` required) |
-| `scp deny-iam-users` | SCP denying IAM user / access key / login profile creation, attached to the org root or given OUs (`--yes` required; `--exempt-arn` for break-glass) |
+| `scp deny-iam-users` | SCP denying IAM user / access key / login profile creation, attached to the org root or given OUs (`--yes` required; `--exempt-arn` for break-glass; `--exempt-user` for a single-user exemption) |
 | `scp alert-management` | EventBridge → SNS email alert on IAM credential creation — detective coverage for the management account, which SCPs cannot bind (`--yes` required; run in us-east-1) |
 
 Run `aws-soc2-setup <command> --help` for flags on each subcommand.
+
+### `scp deny-iam-users` exemptions
+
+The `DenyLongLivedIamCredentials` SCP denies `iam:CreateUser`, `CreateAccessKey`, `CreateLoginProfile`, `CreateServiceSpecificCredential`, and `UploadSSHPublicKey`. Two kinds of exemption are available:
+
+- `--exempt-arn <patterns...>` exempts a **principal** entirely. Matching principals may create any IAM user and credential. Use it for break-glass roles.
+- `--exempt-user <principalArnPattern>=<userArn>` is a **resource-scoped** exemption. Matching principals may run those actions only on the one IAM user named. Every other user stays denied. Repeat the flag for more exemptions.
+
+```bash
+aws-soc2-setup --yes scp deny-iam-users \
+  --exempt-user 'arn:aws:iam::111111111111:role/deployer=arn:aws:iam::111111111111:user/ci-bot'
+```
+
+Each scoped exemption removes its principal from the main statement's `ArnNotLike aws:PrincipalArn` list. It then adds a statement, `DenyScopedExemptionOutsideItsUser<N>`, that denies the same actions to that principal on `NotResource: [<userArn>]`. All five actions take the IAM `user` ARN as their resource, so the scope covers every one of them. The user ARN must be concrete (`arn:aws:iam::<12-digit account>:user/[path/]name`, with no wildcards), and its path must match the user's real path. The principal must be an `arn:aws:iam::` ARN or pattern.
+
+The command fails before it calls AWS if the exemptions would push the SCP past the 5,120-character limit. Re-running the command updates the existing policy in place whenever its content has changed.
 
 ## Setup plan
 

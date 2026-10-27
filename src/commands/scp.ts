@@ -20,6 +20,7 @@ import {
   buildDenyIamUsersPolicy,
   DENY_IAM_USERS_POLICY_DESCRIPTION,
   DENY_IAM_USERS_POLICY_NAME,
+  parseScopedUserExemption,
 } from "../scp/policy.js";
 import {
   attachPolicyToTarget,
@@ -32,6 +33,8 @@ import {
 export interface DenyIamUsersOptions {
   target?: string[];
   exemptArn?: string[];
+  /** Raw `<principalArnPattern>=<userArn>` scoped (single-user) exemptions. */
+  exemptUser?: string[];
 }
 
 /** Options for `scp alert-management`. */
@@ -93,13 +96,17 @@ const reportEnsuredPolicy = (created: boolean, updated: boolean): void => {
  * long-lived credential creation, and attach it to the organization root (or
  * the given targets). Requires `--yes`; `--dry-run` previews the policy.
  * @param globals - Resolved global options.
- * @param options - Attachment targets and exemption ARN patterns.
+ * @param options - Attachment targets, exempt principal ARN patterns, and
+ * scoped (single-user) exemptions.
  */
 export const handleDenyIamUsers = async (
   globals: GlobalOptions,
   options: DenyIamUsersOptions
 ): Promise<void> => {
-  const content = buildDenyIamUsersPolicy(options.exemptArn ?? []);
+  const content = buildDenyIamUsersPolicy(
+    options.exemptArn ?? [],
+    (options.exemptUser ?? []).map(parseScopedUserExemption)
+  );
   if (globals.dryRun) {
     const where = options.target?.join(", ") ?? "the organization root";
     info(`[dry-run] Would attach ${DENY_IAM_USERS_POLICY_NAME} to ${where}:`);
@@ -186,6 +193,11 @@ const applyAlertManagement = async (
   success(`EventBridge rule ${ruleName} enabled`);
 };
 
+const collectRepeatable = (value: string, previous: string[]): string[] => [
+  ...previous,
+  value,
+];
+
 /**
  * Register the `scp` command group (deny-iam-users, alert-management).
  * @param program - The root commander program to attach the commands to.
@@ -211,6 +223,14 @@ export const registerScp = (program: Command): void => {
     .option(
       "--exempt-arn <arns...>",
       "Principal ARN patterns exempt from the deny (e.g. a break-glass role)"
+    )
+    .option(
+      "--exempt-user <principalArnPattern=userArn>",
+      "Let a principal create credentials for ONE IAM user only; repeatable " +
+        "(e.g. arn:aws:iam::111111111111:role/deployer=" +
+        "arn:aws:iam::111111111111:user/ci-bot)",
+      collectRepeatable,
+      []
     )
     .action(async (options: DenyIamUsersOptions) => {
       await runAction(async () => {
