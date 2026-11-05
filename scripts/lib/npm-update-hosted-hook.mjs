@@ -1,0 +1,199 @@
+// This file is managed by Lisa and IS replaced on each `lisa` run.
+// Do not edit directly — durable changes belong upstream in Lisa.
+
+/** Original Node hook calls preserve argv/stdin while only authenticated helpers gain a read-only IPC route. */
+import { readJson, runProcess } from "./npm-update-process.mjs";
+import { required, keys } from "./npm-update-contract.mjs";
+import { currentGraph } from "./npm-update-orchestrator.mjs";
+import { realpathSync, lstatSync } from "node:fs";
+import { resolve, join, basename } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { binaryDigest } from "./npm-update-isolation.mjs";
+import {
+  withProvenancePhase,
+  recordProvenancePhase,
+  provenanceFailure,
+} from "./npm-update-invariants.mjs";
+
+const ENTRY = fileURLToPath(import.meta.url);
+const PRELOAD = fileURLToPath(
+  new URL("./npm-update-hook-preload.mjs", import.meta.url)
+);
+// Byte-for-byte the `-e` payload of `rails-prepush` in
+// rails/copy-overwrite/lefthook.yml. `hookEntry` matches it exactly, so any
+// edit to that lefthook command must be mirrored here; the regression test
+// `npm-update-hosted-hook-rails-inline.test.ts` reads the lefthook file and
+// fails when the two drift (CodySwannGT/lisa#4564).
+const RAILS_INLINE =
+  'try { const { main } = await import("./scripts/lisa-rails-prepush.mjs"); const rc = await main(process.argv.slice(1)); if (rc !== 0) console.error(`Rails pre-push refused (exit ${rc}). Retry the same git push command and inspect rails-prepush output for scanner and work-item details.`); process.exitCode = rc; } catch { console.error("Managed Rails push tooling is unavailable or damaged. Run full Lisa apply and retry; raw bootstrap errors are withheld."); process.exitCode = 1; }';
+
+/** Context carries no token; the broker independently retains its immutable read subject in parent memory. */
+export function hostedHookContext(file) {
+  const context = readJson(file, 1_048_576);
+  keys(context, ["version", "root", "cwd", "graph", "native", "reader"]);
+  keys(context.reader, ["root", "path", "deadline"]);
+  keys(context.native, ["node", "git", "gh"]);
+  keys(context.native.node, ["path", "version", "sha256"]);
+  const root = lstatSync(context.root);
+  required(
+    context.version === 1 &&
+      file === join(context.root, "hosted-hooks.json") &&
+      realpathSync(context.root) === context.root &&
+      realpathSync(context.cwd) === context.cwd &&
+      root.isDirectory() &&
+      !root.isSymbolicLink() &&
+      root.uid === process.getuid() &&
+      (root.mode & 0o077) === 0 &&
+      context.reader.root === context.root &&
+      context.reader.path === join(context.root, "hook-reader.sock") &&
+      Number.isSafeInteger(context.reader.deadline) &&
+      context.reader.deadline > Date.now() &&
+      context.reader.deadline <= Date.now() + 1_800_000,
+    "invalid hosted hook context"
+  );
+  const observed = currentGraph(context.graph);
+  required(
+    Object.keys(observed).length <= 128 &&
+      Object.entries(context.graph).every(
+        ([path, hash]) => observed[path] === hash
+      ),
+    "authenticated hook graph changed"
+  );
+  required(
+    context.native.node.version === "22.23.3" &&
+      context.native.node.path === realpathSync(context.native.node.path) &&
+      binaryDigest(context.native.node.path) === context.native.node.sha256,
+    "hosted hook Node changed"
+  );
+  return { ...context, file, deadline: context.reader.deadline };
+}
+
+/** Inline qualification is one exact managed Rails bootstrap; arbitrary eval stays ordinary token-free application code. */
+export function hookEntry(context, args, cwd) {
+  if (
+    args[0] === "--input-type=module" &&
+    args[1] === "-e" &&
+    args[2] === RAILS_INLINE
+  ) {
+    const entry = join(cwd, "scripts/lisa-rails-prepush.mjs");
+    return Object.hasOwn(context.graph, entry) ? entry : null;
+  }
+  if (typeof args[0] !== "string" || args[0].startsWith("-")) return null;
+  const entry = resolve(cwd, args[0]);
+  return Object.hasOwn(context.graph, entry) ? entry : null;
+}
+
+/** Slots are limited read-state labels; they cannot grant a writer or widen the parent's subject. */
+export function hookReadSlot(entry, args, role) {
+  const name = basename(entry);
+  if (name === "lisa-work-item.mjs") {
+    if (args[1] === "prepare-commit-msg") return "commit-prepare";
+    if (args[1] === "validate-commit") return "commit-work-item";
+    if (args[1] === "validate-push" && ["audit", "destination"].includes(role))
+      return `${role}-work-item`;
+  }
+  if (name === "lisa-automation-provenance.mjs") {
+    if (
+      role === "commit" &&
+      args.length === 2 &&
+      typeof args[1] === "string" &&
+      args[1].length > 0 &&
+      !args[1].startsWith("-")
+    )
+      return "commit-provenance";
+    if (args[1] === "check-commit") return "commit-provenance";
+    if (args[1] === "check-push" && ["audit", "destination"].includes(role))
+      return `${role}-provenance`;
+  }
+  return null;
+}
+
+/** Provider tokens, issuer secrets and ambient preload authority are absent from both helper and application processes. */
+export function tokenFreeHookEnvironment(source) {
+  const env = { ...source };
+  for (const name of Object.keys(env))
+    if (
+      /^(?:GH_TOKEN|GITHUB_TOKEN|ACTIONS_ID_TOKEN_|ACTIONS_RUNTIME_|LISA_NPM_DISPATCH_CONTEXT|NODE_OPTIONS|NODE_PATH)/.test(
+        name
+      )
+    )
+      delete env[name];
+  return env;
+}
+
+/** Input consumes the same fixed bound and one original deadline observation before native execution. */
+async function originalHookInput(context) {
+  const chunks = [];
+  let size = 0;
+  try {
+    for await (const chunk of process.stdin) {
+      size += chunk.length;
+      required(size <= 4_194_304, "original hook stdin exceeded");
+      chunks.push(chunk);
+    }
+    const timeout = Math.min(1_800_000, context.deadline - Date.now());
+    required(timeout > 0, "original hook phase expired");
+    return { input: Buffer.concat(chunks), timeout };
+  } catch (error) {
+    recordProvenancePhase(error, "gateway-input");
+    throw error;
+  }
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  withProvenancePhase("gateway-context", () =>
+    required(
+      args.length >= 3 && args[0] === "--context" && args[2] === "--",
+      "invalid hosted Node gateway"
+    )
+  );
+  const context = withProvenancePhase("gateway-context", () =>
+    hostedHookContext(args[1])
+  );
+  const original = args.slice(3);
+  const entry = withProvenancePhase("gateway-entry", () =>
+    hookEntry(context, original, realpathSync(process.cwd()))
+  );
+  withProvenancePhase("gateway-entry", () => {
+    if (entry)
+      required(
+        !original.some(arg =>
+          /^(?:-r|--require|--import|--(?:experimental-)?loader)(?:=|$)/.test(
+            arg
+          )
+        ) &&
+          !process.env.NODE_OPTIONS &&
+          !process.env.NODE_PATH,
+        "unqualified original canonical hook loader"
+      );
+  });
+  const env = tokenFreeHookEnvironment(process.env);
+  if (entry) env.LISA_NPM_HOSTED_HOOK_CONTEXT = context.file;
+  else delete env.LISA_NPM_HOSTED_HOOK_CONTEXT;
+  const { input, timeout } = await originalHookInput(context);
+  const result = await runProcess(
+    context.native.node.path,
+    entry ? ["--import", pathToFileURL(PRELOAD).href, ...original] : original,
+    {
+      cwd: process.cwd(),
+      env,
+      input,
+      timeout,
+      maximum: 8_388_608,
+      allowed: Array.from({ length: 256 }, (_, code) => code),
+    }
+  ).catch(error => {
+    recordProvenancePhase(error, "gateway-child");
+    throw error;
+  });
+  process.stdout.write(result.stdout);
+  process.stderr.write(result.stderr);
+  process.exitCode = result.code;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === ENTRY)
+  main().catch(error => {
+    process.stderr.write(`${provenanceFailure(error)}\n`);
+    process.exitCode = 1;
+  });

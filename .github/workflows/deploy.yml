@@ -55,9 +55,19 @@ jobs:
 
   release:
     name: Release
-    uses: CodySwannGT/lisa/.github/workflows/release.yml@995f533b00d9b8a60256096bf6d28940164cd893 # v4.69.1
+    uses: CodySwannGT/lisa/.github/workflows/release.yml@f200685b372467c8769ad62113760e9542e597d5 # v4.87.14
     needs: [determine_environment]
     with:
+      # Seeded against the major release.yml declares at this commit. The apply
+      # could not re-pin this caller — no caller template in Lisa references
+      # release.yml, so it could not confirm the file exists at the new commit
+      # and correctly refused to guess. Verified by hand instead: release.yml IS
+      # present at f200685b (tag v4.87.14, 106913 bytes, confirmed locally and
+      # via the GitHub contents API); required inputs are unchanged
+      # (environment, node_version); all eight inputs passed below still exist
+      # and none is retired; and DECLARED_MAJOR is '1' at both the old and the
+      # new commit, so no contract break to react to.
+      expected_workflow_contract_major: '1'
       environment: ${{ needs.determine_environment.outputs.environment }}
       release_strategy: 'standard-version'
       require_approval: false

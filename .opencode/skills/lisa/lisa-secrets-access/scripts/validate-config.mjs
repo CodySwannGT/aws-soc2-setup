@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Validate the `secrets`, `remoteEnv`, and `automations` blocks.
+ * Validate the `secrets`, `remoteEnv`, `automations`, and `sessionManager`
+ * blocks.
  *
  * These blocks are read by shell, by Node, and by generated workflows, so a
  * malformed one surfaces late and somewhere unhelpful — a container that fails
@@ -489,6 +490,423 @@ export function validateAutomations(automations, remoteEnv) {
 }
 
 /**
+ * A manager session name: lowercase letters, digits, `-` and `_`, at most 64
+ * characters.
+ *
+ * Narrower than `managedBy=` accepts on purpose. The same string names the
+ * tmux session, the `claude -n` session that workers `SendMessage` to, and the
+ * default Telegram state dir. tmux silently rewrites `.` and `:` in session
+ * names, so a name containing either would start a session that `stop` could
+ * never find again by the name in config.
+ */
+const SESSION_MANAGER_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+/** One path segment that cannot climb out of, or hide inside, its parent. */
+const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** Seconds per `/loop` interval unit. */
+const INTERVAL_UNITS = { s: 1, m: 60, h: 3600, d: 86_400 };
+
+/**
+ * A Telegram bot token's shape (`<bot id>:<secret>`).
+ *
+ * Matched on values as well as on credential-shaped key names, because the
+ * likeliest mistake is pasting the token into a plausible field rather than
+ * naming it `token`.
+ */
+const TOKEN_VALUE = /^\d{5,}:[A-Za-z0-9_-]{30,}$/;
+
+/** Key names that only ever hold a credential. */
+const CREDENTIAL_KEY = /token|secret|password|passwd|api[-_]?key|credential/i;
+
+/**
+ * Parse a `/loop` interval such as `5m` into seconds.
+ *
+ * One parser for the validator and every consumer (the status view's cadence,
+ * the launch command), so "valid" and "usable" cannot disagree about the same
+ * string.
+ * @param {unknown} text Interval as written in config.
+ * @returns {number|null} Seconds, or null when it does not parse or is zero.
+ */
+export function parseLoopInterval(text) {
+  if (typeof text !== "string") return null;
+  const match = /^(\d+)([smhd])$/.exec(text);
+  if (!match) return null;
+  const seconds = Number(match[1]) * INTERVAL_UNITS[match[2]];
+  return seconds > 0 ? seconds : null;
+}
+
+/**
+ * Whether a value is a plain object (not null, not an array).
+ * @param {unknown} value Candidate.
+ * @returns {boolean} True for `{}`-shaped values.
+ */
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Validate `sessionManager.repos.root`.
+ * @param {unknown} root The declared value.
+ * @returns {string[]} Problems found.
+ */
+function validateReposRoot(root) {
+  if (root === undefined) return [];
+  // `.` means the repos are direct children of the project root.
+  if (root === ".") return [];
+  const segments = typeof root === "string" ? root.split("/") : [];
+  if (segments.length && segments.every(part => SAFE_SEGMENT.test(part))) {
+    return [];
+  }
+  return [
+    `sessionManager.repos.root ${JSON.stringify(root)} must be a relative ` +
+      `path inside the project, such as "projects" (or "." for repos at the ` +
+      `project root). Workers start there with ` +
+      `permissions bypassed.`,
+  ];
+}
+
+/**
+ * Validate one `sessionManager.repos.entries` entry.
+ * @param {string} key Repo key.
+ * @param {unknown} entry Its declaration.
+ * @returns {string[]} Problems found.
+ */
+function validateRepoEntry(key, entry) {
+  if (!SAFE_SEGMENT.test(key)) {
+    return [
+      `sessionManager.repos.entries key ${JSON.stringify(key)} is not one ` +
+        `safe path segment. It is joined onto repos.root to find the repo.`,
+    ];
+  }
+  const hints = isPlainObject(entry) ? entry.hints : undefined;
+  const valid =
+    Array.isArray(hints) &&
+    hints.length > 0 &&
+    hints.every(hint => typeof hint === "string" && hint.trim() !== "");
+  return valid
+    ? []
+    : [
+        `sessionManager.repos.entries["${key}"] needs hints: a non-empty ` +
+          `array of words that identify work for this repo.`,
+      ];
+}
+
+/**
+ * Validate `sessionManager.repos`.
+ *
+ * Every entry needs hints, because hints are the only thing the manager routes
+ * a work item on. An entry without them can never be chosen, so a ticket meant
+ * for it is either asked about on every cycle or routed somewhere else.
+ * @param {unknown} repos The declared value.
+ * @returns {string[]} Problems found.
+ */
+function validateSessionManagerRepos(repos) {
+  if (repos === undefined) return [];
+  if (!isPlainObject(repos)) {
+    return [
+      `sessionManager.repos must be an object with an "entries" map. Omit it ` +
+        `for a single-repo project.`,
+    ];
+  }
+  const entries = repos.entries;
+  if (!isPlainObject(entries) || Object.keys(entries).length === 0) {
+    return [
+      ...validateReposRoot(repos.root),
+      `sessionManager.repos.entries must name at least one repo. Omit ` +
+        `sessionManager.repos for a single-repo project.`,
+    ];
+  }
+  return [
+    ...validateReposRoot(repos.root),
+    ...Object.entries(entries).flatMap(([key, entry]) =>
+      validateRepoEntry(key, entry)
+    ),
+  ];
+}
+
+/**
+ * Check a block of numeric fields, each against its own predicate.
+ * @param {string} block Name under `sessionManager`, for messages.
+ * @param {unknown} value The declared block.
+ * @param {Record<string, [(n: number) => boolean, string]>} rules Per-key
+ *   predicate and the phrase describing a legal value.
+ * @returns {string[]} Problems found.
+ */
+function validateNumberBlock(block, value, rules) {
+  if (value === undefined) return [];
+  if (!isPlainObject(value))
+    return [`sessionManager.${block} must be an object`];
+  return Object.entries(rules).flatMap(([key, [legal, phrase]]) => {
+    const n = value[key];
+    if (n === undefined) return [];
+    if (typeof n === "number" && Number.isFinite(n) && legal(n)) return [];
+    return [
+      `sessionManager.${block}.${key} is ${JSON.stringify(n)}; it must be ` +
+        `${phrase}.`,
+    ];
+  });
+}
+
+/** Legal values for `sessionManager.capacity`. */
+const CAPACITY_RULES = {
+  maxWorkers: [n => Number.isInteger(n) && n > 0, "a positive integer"],
+  gbPerWorker: [n => n > 0, "a positive number"],
+  reserveGb: [n => n >= 0, "zero or a positive number"],
+  cpuFraction: [n => n > 0 && n <= 1, "greater than 0 and at most 1"],
+  maxLoadPerCore: [n => n > 0, "a positive number"],
+};
+
+/** Legal values for `sessionManager.stall`. */
+const STALL_RULES = {
+  noOutputMinutes: [n => n >= 0, "zero or a positive number"],
+  maxAttempts: [n => Number.isInteger(n) && n > 0, "a positive integer"],
+  requestionHours: [n => n >= 0, "zero or a positive number"],
+};
+
+/** Notification providers `sessionManager.notify.provider` accepts. */
+const NOTIFY_PROVIDERS = ["none", "telegram"];
+
+/**
+ * Validate `sessionManager.notify`.
+ *
+ * A notification channel is optional (#4555): an absent block, an absent
+ * provider and `"none"` all mean the manager runs with no channel, and then
+ * there is no state dir to name. A `stateDir` without the telegram provider is
+ * refused rather than ignored, because it means the operator believes a bot is
+ * attached when none will be. For telegram, `stateDir` is required rather than
+ * defaulted here: the default dir is shared by every project, and a shared dir
+ * is exactly how one project's bot gets taken over by another's session.
+ * @param {unknown} notify The declared value.
+ * @returns {string[]} Problems found.
+ */
+function validateNotify(notify) {
+  if (notify !== undefined && !isPlainObject(notify)) {
+    return ["sessionManager.notify must be an object"];
+  }
+  const provider = notify?.provider ?? "none";
+  if (!NOTIFY_PROVIDERS.includes(provider)) {
+    return [
+      `sessionManager.notify.provider ${JSON.stringify(provider)} is not ` +
+        `supported. Use "none" (no notification channel) or "telegram".`,
+    ];
+  }
+  const hasStateDir = notify?.stateDir !== undefined;
+  const stateDirOk =
+    typeof notify?.stateDir === "string" && notify.stateDir.trim() !== "";
+  if (provider === "none") {
+    return hasStateDir
+      ? [
+          `sessionManager.notify.stateDir is set, but notify.provider is not ` +
+            `"telegram", so no bot would use it. Set notify.provider to ` +
+            `"telegram", or remove notify.stateDir.`,
+        ]
+      : [];
+  }
+  return stateDirOk
+    ? []
+    : [
+        `sessionManager.notify.stateDir is missing. Each project needs its ` +
+          `own Telegram state dir, such as ` +
+          `"~/.claude/channels/telegram-<project>".`,
+      ];
+}
+
+/**
+ * Maps under `sessionManager` whose KEYS are names chosen by the project, not
+ * config field names. `repos.entries` is keyed by child repository directory,
+ * so a repo called `token-service` or `secrets-manager` is a name, not a
+ * credential field; testing it against CREDENTIAL_KEY made `init-config
+ * --write` emit a block that `validate` then refused (CodySwannGT/lisa#4564).
+ * Their VALUES are still walked, so a token placed inside an entry is caught.
+ */
+const NAME_KEYED_MAPS = [["repos", "entries"]];
+
+/**
+ * Whether a key trail below `sessionManager` is exactly a name-keyed map.
+ * Compared segment by segment, never as a dotted string: a literal key
+ * `"repos.entries"` would otherwise borrow the exemption.
+ * @param {readonly string[]} segments Object keys from the block root.
+ * @returns {boolean} True for a map whose keys are names.
+ */
+function isNameKeyedMap(segments) {
+  return NAME_KEYED_MAPS.some(
+    map =>
+      map.length === segments.length &&
+      map.every((segment, i) => segment === segments[i])
+  );
+}
+
+/**
+ * Walk the block for anything that looks like a credential.
+ *
+ * Config is committed, and this block configures a bot that grants shell
+ * access over chat. The token belongs in the project's secrets provider
+ * (#4555; the state dir's 0600 dotenv file only when no provider is
+ * configured), so a token here is both leaked and unused. The value is never
+ * echoed.
+ * @param {unknown} value Subtree.
+ * @param {string} path Dotted path so far, for messages.
+ * @param {readonly string[] | null} [segments] Object keys from the block root;
+ *   `null` once an array is crossed, since no name-keyed map lives there.
+ * @returns {string[]} Problems found.
+ */
+function findCredentials(value, path, segments = []) {
+  if (typeof value === "string") {
+    return TOKEN_VALUE.test(value.trim())
+      ? [
+          `${path} looks like a bot token. Tokens never go in config: ` +
+            `remove it, and store the token in the project's secrets ` +
+            `provider with session-manager.mjs store-token ` +
+            `(/lisa:setup:session-manager runs it).`,
+        ]
+      : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item, i) =>
+      findCredentials(item, `${path}[${i}]`, null)
+    );
+  }
+  if (!isPlainObject(value)) return [];
+  const keysAreNames = segments !== null && isNameKeyedMap(segments);
+  return Object.entries(value).flatMap(([key, child]) =>
+    !keysAreNames && CREDENTIAL_KEY.test(key)
+      ? [
+          `${path}.${key} names a credential. Tokens and secrets never go in ` +
+            `config: remove it, and keep the bot token in the project's ` +
+            `secrets provider (session-manager.mjs store-token, run by ` +
+            `/lisa:setup:session-manager).`,
+        ]
+      : findCredentials(
+          child,
+          `${path}.${key}`,
+          segments === null ? null : [...segments, key]
+        )
+  );
+}
+
+/**
+ * Validate `sessionManager.operatorIds`: the people the manager works for,
+ * whose assigned items it dispatches first. Matched against the assignee the
+ * way "me" is, so the GitHub entry is a login, not the numeric id
+ * `trustedAuthorIds` takes. An empty list reads as configured but names no
+ * one, so it is refused like an empty `trustedAuthorIds`.
+ * @param {unknown} ids The value, if present.
+ * @returns {string[]} Problems found.
+ */
+function validateOperatorIds(ids) {
+  if (ids === undefined) return [];
+  if (
+    !Array.isArray(ids) ||
+    !ids.every(id => typeof id === "string" && id.trim() !== "")
+  ) {
+    return [
+      `sessionManager.operatorIds must be an array of tracker user ids as ` +
+        `strings, matched against the assignee: the GitHub login, the Jira ` +
+        `accountId or the Linear user id.`,
+    ];
+  }
+  return ids.length === 0
+    ? [
+        `sessionManager.operatorIds must name at least one person. Remove ` +
+          `the key instead if the manager works only for its own identity.`,
+      ]
+    : [];
+}
+
+/**
+ * Validate the opt-in `sessionManager` block.
+ *
+ * Structure only, like the rest of this file: whether the bot answers or tmux
+ * is installed is the setup skill's and doctor's business. An absent block is
+ * valid, because the manager is opt-in. Pass the merged block (local over
+ * global per key), since any field may come from either file.
+ * @param {unknown} block The block, if present.
+ * @returns {string[]} Problems found.
+ */
+export function validateSessionManager(block) {
+  if (block === undefined || block === null) return [];
+  if (!isPlainObject(block)) return ["sessionManager must be an object"];
+
+  const nameOk =
+    typeof block.name === "string" && SESSION_MANAGER_NAME.test(block.name);
+  const intervalOk =
+    block.interval === undefined || parseLoopInterval(block.interval) !== null;
+  const trustedOk =
+    block.trustedAuthorIds === undefined ||
+    (Array.isArray(block.trustedAuthorIds) &&
+      block.trustedAuthorIds.every(id => typeof id === "string" && id !== ""));
+
+  return [
+    ...(nameOk
+      ? []
+      : [
+          `sessionManager.name ${JSON.stringify(block.name)} must be a slug: ` +
+            `lowercase letters, digits, "-" or "_", at most 64 characters. ` +
+            `It names the tmux session and the session workers message.`,
+        ]),
+    ...(intervalOk
+      ? []
+      : [
+          `sessionManager.interval ${JSON.stringify(block.interval)} is not a ` +
+            `/loop interval such as "30s", "5m", "2h" or "1d".`,
+        ]),
+    ...validateSessionManagerRepos(block.repos),
+    ...validateNumberBlock("capacity", block.capacity, CAPACITY_RULES),
+    ...validateNumberBlock("stall", block.stall, STALL_RULES),
+    ...validateNotify(block.notify),
+    ...(trustedOk
+      ? []
+      : [
+          `sessionManager.trustedAuthorIds must be an array of stable ` +
+            `tracker user ids (GitHub numeric user id, Jira accountId, ` +
+            `Linear user id), not logins or display names.`,
+        ]),
+    // An empty list reads as "set" but filters no author at all, so on a
+    // public repo it would dispatch anyone's item while looking configured.
+    ...(trustedOk &&
+    Array.isArray(block.trustedAuthorIds) &&
+    block.trustedAuthorIds.length === 0
+      ? [
+          `sessionManager.trustedAuthorIds must name at least one author id. ` +
+            `An empty list filters no author at all; remove the key instead ` +
+            `if every author's item may be dispatched.`,
+        ]
+      : []),
+    ...validateOperatorIds(block.operatorIds),
+    ...validateBacklogPickup(block.backlogPickup, block.operatorIds),
+    ...findCredentials(block, "sessionManager"),
+  ];
+}
+
+/**
+ * Validate `sessionManager.backlogPickup`: opt-in promotion of validated
+ * backlog items to Ready, assigned to `operatorIds[0]`. Without an operator
+ * there is nobody to assign the promoted item to, so it is refused rather
+ * than promoting work into the agent's own name.
+ * @param {unknown} value The value, if present.
+ * @param {unknown} operatorIds `sessionManager.operatorIds`, if present.
+ * @returns {string[]} Problems found.
+ */
+function validateBacklogPickup(value, operatorIds) {
+  if (value === undefined) return [];
+  if (typeof value !== "boolean") {
+    return [
+      `sessionManager.backlogPickup must be true or false (absent means false).`,
+    ];
+  }
+  const hasOperator =
+    Array.isArray(operatorIds) &&
+    operatorIds.some(id => typeof id === "string" && id.trim() !== "");
+  return value && !hasOperator
+    ? [
+        `sessionManager.backlogPickup needs sessionManager.operatorIds: a ` +
+          `promoted backlog item is assigned to the first operator.`,
+      ]
+    : [];
+}
+
+/**
  * Validate every block this plan introduced.
  * @param {object} cfg Parsed `.lisa.config.json`.
  * @returns {string[]} Problems found.
@@ -498,19 +916,89 @@ export function validateConfig(cfg) {
     ...validateSecrets(cfg.secrets),
     ...validateRemoteEnv(cfg.remoteEnv),
     ...validateAutomations(cfg.automations, cfg.remoteEnv),
+    ...validateSessionManager(cfg.sessionManager),
   ];
 }
 
+/** Keys a parsed JSON layer may not contribute to a merged object. */
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * Merge config layers key by key, later layers winning — the
+ * `config-resolution` rule for `.lisa.config.local.json` over
+ * `.lisa.config.json`.
+ *
+ * Plain objects merge recursively; arrays and scalars are replaced, never
+ * concatenated: a local `hints` list means "these hints", not "these as well".
+ * Prototype keys are dropped, since a layer is parsed JSON. The session
+ * manager's runtime resolver uses this same function, so validation and the
+ * runtime can never disagree about what a local override means.
+ * @param {...unknown} layers Lowest precedence first.
+ * @returns {Record<string, unknown>} A new object; no layer is mutated.
+ */
+export function mergeConfigLayers(...layers) {
+  const objects = layers.filter(isPlainObject);
+  const keys = [...new Set(objects.flatMap(Object.keys))].filter(
+    key => !UNSAFE_KEYS.has(key)
+  );
+  return Object.fromEntries(
+    keys.map(key => {
+      const values = objects
+        .filter(layer => Object.hasOwn(layer, key))
+        .map(layer => layer[key]);
+      const top = values.at(-1);
+      return [
+        key,
+        isPlainObject(top)
+          ? mergeConfigLayers(...values.filter(isPlainObject))
+          : top,
+      ];
+    })
+  );
+}
+
+/**
+ * Read a JSON file, or undefined when it does not exist.
+ * @param {string} file Absolute path.
+ * @returns {unknown} Parsed contents, or undefined.
+ */
+function readJsonIfPresent(file) {
+  return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : undefined;
+}
+
+/**
+ * Read the config this CLI validates from a project root.
+ *
+ * `sessionManager` is merged local over committed (deep, per key), because
+ * that is how the runtime resolves it and a bad local override must fail here,
+ * not at runtime. Every other block is read from `.lisa.config.json` alone,
+ * exactly as before, so their validation is unchanged.
+ * @param {string} root Project root.
+ * @returns {Record<string, unknown> | null} Config to validate, or null when
+ *   neither file exists.
+ */
+export function readValidationConfig(root) {
+  const committed = readJsonIfPresent(join(root, ".lisa.config.json"));
+  const local = readJsonIfPresent(join(root, ".lisa.config.local.json"));
+  if (committed === undefined && local === undefined) return null;
+  const base = isPlainObject(committed) ? committed : {};
+  const blocks = [base.sessionManager, local?.sessionManager].filter(
+    isPlainObject
+  );
+  if (blocks.length === 0) return base;
+  return { ...base, sessionManager: mergeConfigLayers(...blocks) };
+}
+
 function main() {
-  const path = join(process.cwd(), ".lisa.config.json");
-  if (!existsSync(path)) {
+  const cfg = readValidationConfig(process.cwd());
+  if (cfg === null) {
     console.log("no .lisa.config.json — nothing to validate");
     return;
   }
-  const problems = validateConfig(JSON.parse(readFileSync(path, "utf8")));
+  const problems = validateConfig(cfg);
   if (!problems.length) {
     console.log(
-      "config: secrets, remoteEnv and automations blocks are well-formed"
+      "config: secrets, remoteEnv, automations and sessionManager blocks are well-formed"
     );
     return;
   }

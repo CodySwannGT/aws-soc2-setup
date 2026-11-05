@@ -2,6 +2,8 @@
 name: lisa-notion-to-tracker
 description: "Break down a Notion PRD into…"
 ---
+Break down a Notion PRD into Epics, Stories, and Sub-tasks in the configured destination tracker (JIRA, GitHub Issues, or Linear per .lisa.config.json). Use this skill whenever the user shares a Notion PRD URL and wants it converted into tracker tickets, or asks to "break down a PRD", "create tickets from a PRD", "turn this PRD into tickets", or similar. Also trigger when the user mentions creating epics/stories/tasks from a Notion document. This skill handles the full pipeline: fetching the PRD, analyzing comments, researching the codebase, identifying blockers, and creating all tickets with empirical verification plans.
+
 
 # Notion PRD to Tracker Breakdown
 
@@ -200,6 +202,11 @@ planning proceeds. Per atom:
   requirement.
 - **Pattern shape (SHOULD)** — an EARS pattern (ubiquitous / When / While / If-then / Where) or an
   equivalent single-behavior sentence; conforming shapes decompose into Gherkin mechanically.
+- **Learned planning checks** — load the `Planning (...)` checks through the bounded projection
+  (`lisa-task-decomposition` step 0). Test the register against every `Planning (prd)` check; an
+  atom or a missing atom that fails one is a `product-clarity` item quoting the check, exactly
+  like the failures above. Carry the `Planning (decomposition)` checks into Phases 3–5. Each is
+  a gap a dispatched worker once had to stop and ask about, so catching it here is the point.
 
 Failures here are **requirement-level product clarifications**, not internal errors: report each in
 the dry-run report as a `product-clarity` item quoting the atom verbatim, naming the defect, and

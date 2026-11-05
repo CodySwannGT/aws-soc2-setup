@@ -3,6 +3,8 @@ name: lisa-linear-validate-issue
 description: "Validates a proposed Linear…"
 allowed-tools: ["Skill", "Bash"]
 ---
+Validates a proposed Linear work item spec (Project, Issue, or sub-Issue) — or an existing Linear item — against the organizational quality gates without writing anything. Returns a structured PASS/FAIL report per gate with concrete remediation. Single source of truth for what makes a valid Linear item — both the write path (linear-write-issue runs it pre-write) and the dry-run path (linear-to-tracker runs it during PRD intake) call this skill so the bar can never drift.
+
 
 # Validate Linear Work Item: $ARGUMENTS
 
@@ -331,6 +333,8 @@ Without a baseline and a target an Improvement has no verifiable terminal state 
 #### S18 — Stateless-pickup dry-run
 
 The autonomy gate, run last, on every build-ready leaf (use the S15 classification; `N/A` for containers and non-build-ready items). Simulate a stateless agent reading only this item and the links it can resolve — session knowledge about the codebase does not count, because the next claimant will not have it. List every question that agent would have to ask a human before starting work, before choosing between materially different implementations, or before declaring the work done.
+
+**Learned planning checks.** Questions that past dispatched workers actually had to stop and ask are the best predictor of the next one. Load the `Planning (...)` checks through the bounded projection exactly as `lisa-task-decomposition` step 0 does, and add each one that applies to this item as a question the simulated agent must be able to answer from the item and the links it can resolve, the same reach S18 already allows. One it cannot answer is a FAIL question like any other, quoting the check's rule. No ledger, or a malformed one, adds nothing and never fails this gate.
 
 Zero questions → PASS. Any question → FAIL, with each question listed verbatim as its own remediation line — these are exactly the clarifying comments the caller posts to the source. The structure gates are proxies; this gate checks the readiness property itself: `ready` means a stateless agent can drive this item to its terminal state with zero human clarification (see `work-item-definition-of-ready`).
 

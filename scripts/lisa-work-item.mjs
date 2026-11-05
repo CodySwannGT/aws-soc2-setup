@@ -12,6 +12,8 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
+  readlinkSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -22,6 +24,20 @@ import { dirname, join, resolve } from "node:path";
 import { isIP } from "node:net";
 
 import { invokedAsScript } from "./lib/invoked-as-script.mjs";
+import {
+  authorizeCompletion,
+  completionDenial,
+} from "./lib/completion-authorization.mjs";
+import { completionContext } from "./lib/completion-proof-adapters.mjs";
+import { publishCompletionProof } from "./lib/completion-proof-publisher.mjs";
+import {
+  MAX_RECORD_BYTES,
+  CompletionProofError,
+} from "./lib/completion-proof-shape.mjs";
+
+const COMPLETION_WRITE_ERROR = "write-error";
+const COMPLETION_READ_ERROR = "read-error";
+const ALREADY_COMPLETED = "already-completed";
 
 /**
  * Contract version of the traceability gate's script half, reported by the
@@ -49,7 +65,7 @@ import { invokedAsScript } from "./lib/invoked-as-script.mjs";
  * Bump the MINOR whenever a change to this file would alter a verdict the gate
  * reports, so a consumer running old logic can be told how far behind it is.
  */
-export const WORK_ITEM_CONTRACT_VERSION = "1.1.0";
+export const WORK_ITEM_CONTRACT_VERSION = "1.2.0";
 
 /**
  * Subject of a release-bot commit, which is exempt from the work-item trailer.
@@ -541,7 +557,7 @@ const CHILD_TIMEOUT_MS = Number(
 export function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? process.cwd(),
-    encoding: "utf8",
+    encoding: options.binary === true ? null : "utf8",
     env: options.env ?? process.env,
     input: options.input,
     // Node's default is 1 MiB, and it is silent in exactly the wrong way: an
@@ -578,8 +594,13 @@ export function run(command, args, options = {}) {
   // added later inherits the guarantee instead of having to remember it.
   return {
     ...result,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
+    stdout:
+      options.binary === true
+        ? Buffer.from(result.stdout ?? "")
+        : (result.stdout ?? ""),
+    stderr: Buffer.isBuffer(result.stderr)
+      ? result.stderr.toString("utf8")
+      : (result.stderr ?? ""),
   };
 }
 
@@ -1016,7 +1037,7 @@ export function deployBranchEnvironments(config) {
   return new Map([[branch, PRODUCTION]]);
 }
 
-function trackerContract(config = readConfig()) {
+export function trackerContract(config = readConfig()) {
   const provider = requireString(config.tracker, "tracker").toLowerCase();
   const identityRepo = currentRepoIdentity(config);
   if (provider === "github") {
@@ -1077,11 +1098,36 @@ function trackerContract(config = readConfig()) {
   );
 }
 
+/**
+ * Resolve authored references before any binding or provider decision.
+ *
+ * The literal `github/` namespace is an identity spelling, not a different
+ * tracker or an exemption. Its ASCII segments must survive unchanged; URL
+ * parsing or path normalization would incorrectly admit encoded/dot paths.
+ * @param {unknown} raw Authored work-item reference.
+ * @param {object} contract Existing configured tracker contract.
+ * @returns {string} Repository-scoped canonical identity.
+ */
 function canonicalizeRef(raw, contract = trackerContract()) {
   const value = String(raw ?? "").trim();
   if (contract.provider === "github") {
-    const match = /^([^\s/#]+\/[^\s/#]+)#([1-9]\d*)$/.exec(value);
-    if (!match)
+    const qualified =
+      /^github\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/.exec(value);
+    // Match authored URL bytes before normalization: URL parsers can erase a
+    // port or decode a path that this input contract deliberately refuses.
+    const match =
+      qualified ??
+      /^([^\s/#]+\/[^\s/#]+)#([1-9]\d*)$/.exec(value) ??
+      /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/issues\/([1-9]\d*)$/.exec(
+        value
+      );
+    if (
+      !match ||
+      (qualified &&
+        qualified[1]
+          .split("/")
+          .some(segment => segment === "." || segment === ".."))
+    )
       throw new TrackingError(
         `Invalid GitHub Work-Item '${value}'; expected owner/repo#123`
       );
@@ -1438,12 +1484,56 @@ export function soleWorkItem(text, contract, subject) {
   const refs = [
     ...new Set(values.map(value => canonicalizeRef(value, contract))),
   ];
+  // Canonical repeats (including repository case variants) retain their
+  // meaning. Mixing the URL and canonical representations is two authored
+  // declarations even when normalization would collapse their identity.
+  if (
+    contract.provider === "github" &&
+    values.some(value => value.startsWith("https://github.com/")) &&
+    values.some(value => !value.startsWith("https://github.com/"))
+  ) {
+    throw new TrackingError(
+      `${subject[0].toUpperCase()}${subject.slice(1)} mixes URL and canonical Work-Item declarations; it must name exactly one`
+    );
+  }
   if (refs.length > 1) {
     throw new TrackingError(
       `${subject[0].toUpperCase()}${subject.slice(1)} names ${refs.length} different work items (${refs.join(", ")}); it must name exactly one`
     );
   }
   return refs[0];
+}
+
+/**
+ * Resolve a required binding through the authoritative tracker contract.
+ * Consumers supplying trusted committed configuration avoid reparsing trailers
+ * or treating raw `current` output as a checked branch/queue identity.
+ * This does not change ordinary offline/live validation semantics.
+ * @param {string} message Complete final commit message.
+ * @param {object} [options] Trusted configuration and strict live requirement.
+ * @returns {object} Canonical identity and optional actual provider evidence.
+ */
+export function resolveWorkItemContext(message, options = {}) {
+  const contract = trackerContract(options.config ?? readConfig());
+  const state = readState(false);
+  const ref = soleWorkItem(message, contract, COMMIT_SUBJECT);
+  assertStateBranch(state);
+  assertStateMatches(ref, contract);
+  if (options.requireLive && contract.provider !== "github") {
+    throw new TrackingError("Automation provenance requires GitHub tracking");
+  }
+  const issue = options.requireLive
+    ? githubIssue(ref, contract, options.execute ?? run)
+    : undefined;
+  return {
+    ref,
+    provider: contract.provider,
+    repository: contract.repository,
+    identityRepo: contract.identityRepo,
+    branch: state.branch,
+    lifecycle: contract.lifecycle,
+    issue,
+  };
 }
 
 /**
@@ -1806,28 +1896,34 @@ function typeFromLabels(labels) {
  * @param {string|number} number GitHub issue number.
  * @returns {string[]} State of every sub-issue.
  */
-function githubHierarchy(ref, contract, number) {
+/** Literal typed GraphQL fields are shared by the canonical reader and closed native transport. */
+export function githubHierarchyArgs(contract, number, after) {
   const [owner, repo] = contract.repository.split("/");
   const query =
     "query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){issue(number:$number){subIssues(first:100,after:$after){nodes{state}pageInfo{hasNextPage endCursor}}}}}";
+  const args = [
+    "api",
+    "graphql",
+    "-f",
+    `query=${query}`,
+    "-F",
+    `owner=${owner}`,
+    "-F",
+    `repo=${repo}`,
+    "-F",
+    `number=${number}`,
+  ];
+  if (after) args.push("-F", `after=${after}`);
+  return args;
+}
+
+function githubHierarchy(ref, contract, number, execute = run) {
   const states = [];
   const cursor = { after: null };
 
   do {
-    const args = [
-      "api",
-      "graphql",
-      "-f",
-      `query=${query}`,
-      "-F",
-      `owner=${owner}`,
-      "-F",
-      `repo=${repo}`,
-      "-F",
-      `number=${number}`,
-    ];
-    if (cursor.after) args.push("-F", `after=${cursor.after}`);
-    const result = run("gh", args, { allowFailure: true });
+    const args = githubHierarchyArgs(contract, number, cursor.after);
+    const result = execute("gh", args, { allowFailure: true });
     if (result.status !== 0) throw githubFailure(result, ref);
 
     const response = safeJson(result.stdout, `GitHub issue ${ref} hierarchy`);
@@ -1915,20 +2011,27 @@ export function resetGhVersionCheck() {
   ghVersionChecked = false;
 }
 
-function githubIssue(ref, contract) {
-  assertGhVersion();
+/** Checkpoint history cannot exhaust capture; complete backlink candidates and all other canonical fields survive. */
+export function githubIssueViewArgs(repository, number) {
+  return [
+    "issue",
+    "view",
+    number,
+    "--repo",
+    repository,
+    "--json",
+    "number,url,state,body,labels,comments,closedByPullRequestsReferences",
+    "--jq",
+    '.comments |= map(select(.body | contains("[lisa-pr-link]")))',
+  ];
+}
+
+function githubIssue(ref, contract, execute = run) {
+  assertGhVersion(execute);
   const number = ref.slice(ref.lastIndexOf("#") + 1);
-  const result = run(
+  const result = execute(
     "gh",
-    [
-      "issue",
-      "view",
-      number,
-      "--repo",
-      contract.repository,
-      "--json",
-      "number,url,state,labels,comments,closedByPullRequestsReferences",
-    ],
+    githubIssueViewArgs(contract.repository, number),
     {
       allowFailure: true,
     }
@@ -1948,7 +2051,7 @@ function githubIssue(ref, contract) {
   assertLeaf(
     ref,
     typeFromLabels(issue.labels),
-    githubHierarchy(ref, contract, number)
+    githubHierarchy(ref, contract, number, execute)
   );
   return issue;
 }
@@ -2373,7 +2476,7 @@ export function textContainsBacklink(value, prUrl) {
  * @param {string} prUrl Pull request URL.
  * @returns {string} The comment body.
  */
-function backlinkBody(prUrl) {
+export function backlinkBody(prUrl) {
   return `${MARKER} ${prUrl}`;
 }
 
@@ -2465,7 +2568,7 @@ function managedBacklinkTarget(body) {
  * @returns {{mine: unknown, others: number}} This PR's comment, and how many
  *   managed comments belong to OTHER pull requests.
  */
-function partitionBacklinks(comments, prUrl, bodyOf) {
+export function partitionBacklinks(comments, prUrl, bodyOf) {
   const mine = [];
   let others = 0;
   for (const comment of comments) {
@@ -2501,6 +2604,70 @@ export function backlinkReport(outcome, ref, prUrl) {
   );
 }
 
+/** Complete canonical pagination is shared by the writer and its scoped controller. */
+export function githubBacklinkListArgs(repository, number) {
+  if (
+    !/^[\w.-]+\/[\w.-]+$/.test(repository) ||
+    !/^[1-9]\d*$/.test(String(number))
+  )
+    throw new Error("invalid canonical GitHub backlink repository/issue");
+  return [
+    "api",
+    "--paginate",
+    `repos/${repository}/issues/${number}/comments?per_page=100`,
+    "--jq",
+    '{sourceCount:length,comments:map(select(.body | contains("[lisa-pr-link]")))}',
+  ];
+}
+
+/**
+ * Native successful pagination emits one compact projected envelope per page.
+ * Counts precede filtering so checkpoint removal cannot evade the original
+ * 100-page/10,000-comment bounds. Decode the entire completed response before
+ * selecting any writer target; full original candidate objects stay ordered.
+ * @param {string} output Complete stdout from a successful bounded native listing.
+ * @returns {object[]} Complete marker candidates, including prose the ownership parser may refuse.
+ */
+export function githubBacklinkComments(output) {
+  if (typeof output !== "string" || !output.trim())
+    throw new Error("invalid or incomplete GitHub backlink pages");
+  const pages = output
+    .trim()
+    .split(/\r?\n/)
+    .map(line => JSON.parse(line));
+  if (
+    pages.length > 100 ||
+    pages.some(
+      page =>
+        !page ||
+        typeof page !== "object" ||
+        Array.isArray(page) ||
+        Object.keys(page).length !== 2 ||
+        !Object.hasOwn(page, "sourceCount") ||
+        !Object.hasOwn(page, "comments") ||
+        !Number.isSafeInteger(page.sourceCount) ||
+        page.sourceCount < 0 ||
+        page.sourceCount > 100 ||
+        !Array.isArray(page.comments) ||
+        page.comments.length > page.sourceCount ||
+        page.comments.some(
+          comment =>
+            !comment ||
+            typeof comment.body !== "string" ||
+            !comment.body.includes(MARKER) ||
+            !(
+              (typeof comment.id === "string" ||
+                Number.isSafeInteger(comment.id)) &&
+              /^[1-9]\d*$/.test(String(comment.id))
+            )
+        )
+    ) ||
+    pages.reduce((count, page) => count + page.sourceCount, 0) > 10000
+  )
+    throw new Error("invalid or over-bound GitHub backlink pages");
+  return pages.flatMap(page => page.comments);
+}
+
 /**
  * Establish the backlink on a GitHub issue.
  * @param {string} ref Canonical `owner/repo#number` reference.
@@ -2510,17 +2677,11 @@ export function backlinkReport(outcome, ref, prUrl) {
  */
 function githubBacklink(ref, prUrl) {
   const [repository, number] = ref.split("#");
-  const listing = run(
-    "gh",
-    [
-      "api",
-      "--paginate",
-      `repos/${repository}/issues/${number}/comments?per_page=100`,
-    ],
-    { allowFailure: true }
-  );
+  const listing = run("gh", githubBacklinkListArgs(repository, number), {
+    allowFailure: true,
+  });
   if (listing.status !== 0) throw githubFailure(listing, ref);
-  const comments = safeJson(listing.stdout, `GitHub comments on ${ref}`);
+  const comments = githubBacklinkComments(listing.stdout);
   // This listing is the read-before-write, and it is fetched here rather than
   // passed in for exactly that reason: the version you last wrote is not the
   // version that is live on a surface other agents also comment on.
@@ -3306,7 +3467,7 @@ function parsePushGroups(input, remote) {
   // scoped to branch-authored commits (issue #1956).
   const defaultRef = remoteDefaultRef(remote);
   for (const line of input.trim().split(/\r?\n/).filter(Boolean)) {
-    const [localRef, localOid, , remoteOid] = line.trim().split(/\s+/);
+    const [localRef, localOid, remoteRef, remoteOid] = line.trim().split(/\s+/);
     if (!localOid || ZERO_OID.test(localOid)) continue;
     const existing = Boolean(remoteOid) && !ZERO_OID.test(remoteOid);
     const args = existing
@@ -3327,6 +3488,7 @@ function parsePushGroups(input, remote) {
         ? `${localRef} ${abbreviate(remoteOid)}..${abbreviate(localOid)}`
         : `${localRef} (new branch) ${abbreviate(localOid)}`,
       localRef,
+      remoteRef,
       scope: args,
     });
   }
@@ -3526,7 +3688,24 @@ function prWorkItems(body, contract) {
     throw new TrackingError(
       "No Work-Item trailer anywhere in the pull request body"
     );
-  return [...new Set(values.map(value => canonicalizeRef(value, contract)))];
+  const declared = values.map(value => ({
+    value,
+    ref: canonicalizeRef(value, contract),
+  }));
+  // Validation precedes representation checks; canonical GitHub refs lack ://.
+  const urlRefs = new Set(
+    declared.filter(({ value }) => value.includes("://")).map(({ ref }) => ref)
+  );
+  if (
+    contract.provider === "github" &&
+    declared.some(
+      ({ value, ref }) => !value.includes("://") && urlRefs.has(ref)
+    )
+  )
+    throw new TrackingError(
+      "Pull request body mixes URL and canonical Work-Item declarations for the same work item"
+    );
+  return [...new Set(declared.map(({ ref }) => ref))];
 }
 
 /**
@@ -4394,7 +4573,28 @@ export function commitPendingLisaUpdate(ref, contract, cwd = process.cwd()) {
     rmSync(marker, { force: true });
     return;
   }
+  // The marker names paths, and a path is not the update: an edit made to one
+  // of these files after the session-start update would otherwise be swept
+  // into the update commit under its message (CodySwannGT/lisa#4393). Commit
+  // only when every file still holds the bytes the update recorded; a legacy
+  // marker with no digests cannot prove that, so it is left for a human too.
+  const changed = changedSinceUpdate(pending, files, cwd);
+  if (changed.length > 0) {
+    console.error(
+      `The pending Lisa ${pending.to} update was NOT committed automatically: ${pending.digests ? "these files changed after the update wrote them" : "its record predates content checks, so these files cannot be proved unchanged"}: ${changed.join(", ")}. Review them and commit the Lisa update as its own commit before feature work.`
+    );
+    return;
+  }
+  // Snapshot the index entries for these paths so a failed commit puts back
+  // exactly what the user had staged, rather than unstaging it.
+  const snapshot = run("git", ["ls-files", "-s", "-z", "--", ...files], {
+    cwd,
+  }).stdout;
+  // Set once the commit has landed, so a later failure (reading its tree,
+  // undoing it) is never reported as "not committed".
+  let landed = false;
   try {
+    const previous = git(["rev-parse", "--verify", "HEAD"], { cwd });
     git(["add", "--", ...files], { cwd });
     // `--only` commits exactly these paths, so a feature edit the user had
     // already staged stays staged and out of the update commit. The project's
@@ -4411,19 +4611,182 @@ export function commitPendingLisaUpdate(ref, contract, cwd = process.cwd()) {
       ],
       { cwd, timeout: 10 * 60 * 1000 }
     );
+    landed = true;
+    // `--only` reads the paths again at commit time, and the project's hooks
+    // run in between, so the comparison above does not by itself bind what
+    // was committed. Check the commit's own tree against the recorded
+    // identities; if anything differs, the commit is undone and the update
+    // left for a human, exactly as if the check above had failed.
+    const drifted = committedDrift(pending.digests, files, cwd);
+    if (drifted.length > 0) {
+      git(["reset", "--soft", previous], { cwd });
+      landed = false;
+      const restored = restoreIndexEntries(snapshot, files, cwd);
+      console.error(
+        `The pending Lisa ${pending.to} update was NOT committed automatically: these files changed while it was being committed: ${drifted.join(", ")}. The commit was undone${restored ? "" : ", but restoring what was staged for them failed; check `git status`"}. Review them and commit the Lisa update as its own commit before feature work.`
+      );
+      return;
+    }
     rmSync(marker, { force: true });
     console.log(
       `Committed the pending Lisa ${pending.to} update first, as its own commit, under ${ref}.`
     );
   } catch (error) {
-    run("git", ["reset", "--quiet", "--", ...files], {
-      cwd,
-      allowFailure: true,
-    });
+    if (landed) {
+      console.error(
+        `The pending Lisa ${pending.to} update was committed as HEAD, but it could not be verified or undone (${String(error?.message ?? error).split("\n")[0]}). Inspect HEAD before feature work; if it holds anything besides the Lisa update, undo it with git reset --soft HEAD~1.`
+      );
+      return;
+    }
+    const restored = restoreIndexEntries(snapshot, files, cwd);
     console.error(
-      `The pending Lisa ${pending.to} update could not be committed (${String(error?.message ?? error).split("\n")[0]}). Its files are still in the working tree; commit them as their own commit before feature work.`
+      `The pending Lisa ${pending.to} update could not be committed (${String(error?.message ?? error).split("\n")[0]}). Its files are still in the working tree; commit them as their own commit before feature work.${restored ? "" : " Restoring what was staged for them beforehand also failed; check `git status` before committing."}`
     );
   }
+}
+
+/**
+ * Pending files whose current bytes differ from what the update recorded.
+ *
+ * Recomputed exactly as the auto-update's `workingTreeDigests` records them:
+ * `<100644|100755> <blob id>` for a regular file, `120000 link:<target>` for a
+ * symlink (never hash-object, which follows the link), null for an absent
+ * path. A path the record does not carry, or one that is neither, counts as
+ * changed.
+ * @param {{digests?: Record<string, string | null>}} pending The marker.
+ * @param {string[]} files Pending paths still dirty.
+ * @param {string} cwd Repository directory.
+ * @returns {string[]} The paths that cannot be proved unchanged.
+ */
+function changedSinceUpdate(pending, files, cwd) {
+  const recorded = pending.digests;
+  if (!recorded || typeof recorded !== "object") return [...files];
+  const current = new Map();
+  const present = [];
+  for (const file of files) {
+    let stat;
+    try {
+      stat = lstatSync(resolve(cwd, file));
+    } catch {
+      current.set(file, null);
+      continue;
+    }
+    // Same identity the auto-update recorded: git mode plus blob id for a
+    // file (so an executable-bit change alone counts), the link target for a
+    // symlink (hash-object would follow it to whatever it now reaches).
+    if (stat.isSymbolicLink()) {
+      // A link that vanishes before it can be read stays unrecorded, which
+      // counts as changed.
+      try {
+        current.set(file, `120000 link:${readlinkSync(resolve(cwd, file))}`);
+      } catch {
+        continue;
+      }
+    } else if (stat.isFile())
+      present.push([file, stat.mode & 0o111 ? "100755" : "100644"]);
+  }
+  if (present.length > 0) {
+    const ids = run(
+      "git",
+      ["hash-object", "--", ...present.map(([file]) => file)],
+      {
+        cwd,
+        allowFailure: true,
+      }
+    )
+      .stdout.split("\n")
+      .map(line => line.trim())
+      .filter(Boolean);
+    if (ids.length !== present.length) return [...files];
+    present.forEach(([file, mode], index) =>
+      current.set(file, `${mode} ${ids[index]}`)
+    );
+  }
+  return files.filter(
+    file =>
+      !Object.hasOwn(recorded, file) ||
+      !current.has(file) ||
+      current.get(file) !== recorded[file]
+  );
+}
+
+/**
+ * Pending files whose entry in the new HEAD commit is not the recorded identity.
+ *
+ * Reads the commit's tree, not the working tree: a file absent from the record
+ * as null must be absent from HEAD, a `<mode> <blob>` record must match the
+ * tree entry exactly, and a `120000 link:<target>` record must be a symlink
+ * entry whose blob is that target.
+ * @param {Record<string, string | null>} recorded The marker's digests.
+ * @param {string[]} files Paths the commit carried.
+ * @param {string} cwd Repository directory.
+ * @returns {string[]} The paths the commit does not hold as recorded.
+ */
+function committedDrift(recorded, files, cwd) {
+  const listing = run("git", ["ls-tree", "-z", "HEAD", "--", ...files], {
+    cwd,
+    allowFailure: true,
+  });
+  // probe-direction: fail-closed — an unreadable tree counts every path as
+  // drifted, which undoes the commit rather than trusting it.
+  if (listing.status !== 0) return [...files];
+  const entries = new Map();
+  for (const record of listing.stdout.split("\0").filter(Boolean)) {
+    const tab = record.indexOf("\t");
+    const [mode, , blob] = record.slice(0, tab).split(" ");
+    entries.set(record.slice(tab + 1), { mode, blob });
+  }
+  return files.filter(file => {
+    const expected = recorded[file];
+    const entry = entries.get(file);
+    if (expected === null) return entry !== undefined;
+    if (entry === undefined) return true;
+    if (expected.startsWith("120000 link:")) {
+      if (entry.mode !== "120000") return true;
+      const target = run("git", ["cat-file", "blob", entry.blob], {
+        cwd,
+        allowFailure: true,
+      });
+      return (
+        target.status !== 0 ||
+        target.stdout !== expected.slice("120000 link:".length)
+      );
+    }
+    return `${entry.mode} ${entry.blob}` !== expected;
+  });
+}
+
+/**
+ * Put the index entries for `files` back to a `git ls-files -s -z` snapshot.
+ *
+ * A path absent from the snapshot was not in the index before, so it stays
+ * removed; every other path gets its recorded mode, blob and stage back.
+ *
+ * probe-direction: fail-closed — a failed git call returns false, which the
+ * caller reports to the user as an index it could not restore; it never reads
+ * as a successful restore.
+ * @param {string} snapshot NUL-delimited `ls-files -s` output taken beforehand.
+ * @param {string[]} files Paths the failed commit staged.
+ * @param {string} cwd Repository directory.
+ * @returns {boolean} Whether the restore succeeded.
+ */
+function restoreIndexEntries(snapshot, files, cwd) {
+  const entries = snapshot.split("\0").filter(Boolean);
+  // Drop every entry for these paths first, so a restored stage-0 entry does
+  // not sit beside anything `git add` wrote; then lay the snapshot back.
+  const removal = run(
+    "git",
+    ["update-index", "--force-remove", "--", ...files],
+    { cwd, allowFailure: true }
+  );
+  if (removal.status !== 0) return false;
+  if (entries.length === 0) return true;
+  const restore = run("git", ["update-index", "-z", "--index-info"], {
+    cwd,
+    input: entries.map(entry => `${entry}\0`).join(""),
+    allowFailure: true,
+  });
+  return restore.status === 0;
 }
 
 /**
@@ -4507,6 +4870,10 @@ function backlink(args) {
  * repository does the commit declare? — and a value the filter drops is one the
  * reader still saw. That ordering is what keeps a malformed trailer refusable
  * by the gate instead of invisible to it.
+ * Qualified `github/owner/name#number` values use the SAME canonical resolver
+ * as the gates, so the audit does not lose attribution accepted by a hook.
+ * This audit still requires a hash-number declaration; supported issue URLs
+ * remain a gate input, not a newly admitted audit declaration.
  *
  * CRLF needs nothing here, and a relayed review finding that said otherwise
  * was refuted rather than acted on. `workItemLines` splits on `/\r?\n/`, so a
@@ -4518,16 +4885,19 @@ function backlink(args) {
  * @returns {number[]} Declared issue numbers, de-duplicated, in first-seen order.
  */
 export function declaredWorkItemNumbers(body, repository) {
-  const owner = String(repository ?? "").toLowerCase();
+  const owner = String(repository ?? "");
   if (owner === "") return [];
+  const contract = { provider: "github", repository: owner };
   const numbers = [];
   for (const value of workItemLines(body)) {
-    const hash = value.indexOf("#");
-    if (hash === -1) continue;
-    if (value.slice(0, hash).toLowerCase() !== owner) continue;
-    const digits = value.slice(hash + 1);
-    if (!isIssueNumber(digits)) continue;
-    numbers.push(Number(digits));
+    if (!value.includes("#")) continue;
+    try {
+      const ref = canonicalizeRef(value, contract);
+      const digits = ref.slice(ref.indexOf("#") + 1);
+      if (isIssueNumber(digits)) numbers.push(Number(digits));
+    } catch (error) {
+      if (!(error instanceof TrackingError)) throw error;
+    }
   }
   return [...new Set(numbers)];
 }
@@ -4809,7 +5179,7 @@ function recordDeployRole(ref, before, role) {
  * @returns {{applied: boolean, bases: string, merged: number[], report: string, terminal: string|null}}
  *   What was applied, and why.
  */
-function completeGithubWorkItem(ref, contract) {
+function completeGithubWorkItem(ref, contract, prUrl) {
   const [repository] = ref.split("#");
   const merged = mergedPullRequestsIn(githubTimeline(ref), repository);
   if (merged.length === 0) {
@@ -4857,6 +5227,7 @@ function completeGithubWorkItem(ref, contract) {
     recordDeployRole(ref, before, decision.role);
     return {
       applied: true,
+      category: "intermediate",
       bases,
       merged,
       report:
@@ -4865,20 +5236,43 @@ function completeGithubWorkItem(ref, contract) {
       terminal: decision.role,
     };
   }
-  reconcileGithubLifecycle(ref, before, contract);
+  const authorization = authorizeCompletion(proofContext(ref, contract, prUrl));
+  if (authorization.category !== "authorized")
+    return completionDenial(ref, authorization);
+  const current = authorization.native;
+  assertNotAbandoned(ref, current);
+  const already =
+    current.state === "CLOSED" &&
+    carriesLabel(current.labels, contract.lifecycle.terminalName) &&
+    competingLifecycleRoles(
+      current.labels,
+      contract.lifecycle.roles,
+      contract.lifecycle.terminalName
+    ).length === 0;
+  completionNativeOperation(
+    COMPLETION_WRITE_ERROR,
+    "The terminal mutation failed; reread native state before retrying",
+    () => reconcileGithubLifecycle(ref, current, contract)
+  );
   // A SECOND read, deliberately. The edit and the close each reported their own
   // success, and a writer that trusts those is asserting about tracker state it
   // never asked the tracker for — the same defect class as the one above it.
-  const after = githubLifecycleState(
-    ref,
-    `GitHub issue ${ref} completion readback`
+  const after = completionNativeOperation(
+    COMPLETION_READ_ERROR,
+    "The post-write native state could not be read",
+    () => githubLifecycleState(ref, `GitHub issue ${ref} completion readback`)
   );
-  assertCompletionReadback(ref, after, contract);
+  completionNativeOperation(
+    COMPLETION_WRITE_ERROR,
+    "The actual native readback did not establish completion",
+    () => assertCompletionReadback(ref, after, contract)
+  );
   return {
-    applied: true,
+    applied: !already,
+    category: already ? ALREADY_COMPLETED : "completed",
     bases,
     merged,
-    report: `work-item completed: ${ref} -> ${contract.lifecycle.terminalName} (merged: ${evidence}) bases: ${bases}`,
+    report: `work-item ${already ? ALREADY_COMPLETED : "completed"}: ${ref} -> ${contract.lifecycle.terminalName} (merged: ${evidence}) bases: ${bases}`,
     terminal: contract.lifecycle.terminalName,
   };
 }
@@ -5231,6 +5625,12 @@ function completeLinearWorkItem(ref, contract, prUrl) {
     );
   }
   assertBacklink(ref, evidence.url, contract, issue);
+  const authorization = authorizeCompletion(
+    proofContext(ref, contract, prUrl, token)
+  );
+  if (authorization.category !== "authorized")
+    return completionDenial(ref, authorization);
+  const freshIssue = authorization.native.raw;
   // Folded for MATCHING only. Linear workflow states are display strings a
   // human named on the board, so `Done` and `done` are the same state and the
   // comparison has to say so — but nothing a person reads should be the folded
@@ -5238,7 +5638,7 @@ function completeLinearWorkItem(ref, contract, prUrl) {
   // either the configured spelling or the one Linear itself returned.
   const terminal = contract.lifecycle.terminal;
   const configuredName = contract.lifecycle.terminalName;
-  const states = issue.team?.states?.nodes ?? [];
+  const states = freshIssue.team?.states?.nodes ?? [];
   const target = states.find(
     state =>
       String(state?.name ?? "").toLowerCase() === terminal &&
@@ -5257,40 +5657,122 @@ function completeLinearWorkItem(ref, contract, prUrl) {
   // itself worth surfacing rather than hiding behind the config.
   const displayName = String(target.name ?? configuredName);
   if (
-    String(issue.state?.name ?? "").toLowerCase() === terminal &&
-    issue.state?.type === "completed"
+    String(freshIssue.state?.name ?? "").toLowerCase() === terminal &&
+    freshIssue.state?.type === "completed"
   ) {
-    return { merged: [evidence.number], terminal: displayName };
+    return {
+      merged: [evidence.number],
+      terminal: displayName,
+      category: ALREADY_COMPLETED,
+      applied: false,
+    };
   }
-  const update = linearGraphql(
-    token,
-    "mutation($id:String!,$stateId:String!){issueUpdate(id:$id,input:{stateId:$stateId}){success issue{id identifier state{id name type}}}}",
-    { id: issue.id, stateId: target.id },
-    `Linear issue ${ref} completion update`
-  ).issueUpdate;
+  const update = completionNativeOperation(
+    COMPLETION_WRITE_ERROR,
+    "The Linear terminal mutation failed; reread native state before retrying",
+    () =>
+      linearGraphql(
+        token,
+        "mutation($id:String!,$stateId:String!){issueUpdate(id:$id,input:{stateId:$stateId}){success issue{id identifier state{id name type}}}}",
+        { id: issue.id, stateId: target.id },
+        `Linear issue ${ref} completion update`
+      ).issueUpdate
+  );
   if (update?.success !== true) {
-    throw new TrackingError(`Linear issue ${ref} completion update failed`);
+    throw new CompletionProofError(
+      COMPLETION_WRITE_ERROR,
+      `Linear issue ${ref} completion update failed`
+    );
   }
-  const readback = linearCompletionIssue(
-    ref,
-    token,
-    `Linear issue ${ref} completion readback`
+  const readback = completionNativeOperation(
+    COMPLETION_READ_ERROR,
+    "The Linear post-write state could not be read",
+    () =>
+      linearCompletionIssue(
+        ref,
+        token,
+        `Linear issue ${ref} completion readback`
+      )
   );
   if (
     readback?.identifier !== ref ||
     String(readback?.state?.name ?? "").toLowerCase() !== terminal ||
     readback?.state?.type !== "completed"
   ) {
-    throw new TrackingError(
+    throw new CompletionProofError(
+      COMPLETION_WRITE_ERROR,
       `Linear issue ${ref} did not read back in workflow state ${displayName}`
     );
   }
-  return { merged: [evidence.number], terminal: displayName };
+  return {
+    merged: [evidence.number],
+    terminal: displayName,
+    category: "completed",
+    applied: true,
+  };
+}
+
+/** Preserve operational outcome categories even after a partial native write. */
+function completionNativeOperation(category, description, operation) {
+  try {
+    return operation();
+  } catch (error) {
+    if (error instanceof CompletionProofError) throw error;
+    throw new CompletionProofError(
+      category,
+      `${description}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
+/** The same portable proof boundary is reached by every supported terminal writer. */
+function proofContext(ref, contract, prUrl, suppliedToken) {
+  const token =
+    contract.provider === "linear"
+      ? (suppliedToken ?? readLinearKey(contract.workspace))
+      : null;
+  if (contract.provider === "linear" && !token)
+    throw new TrackingError(
+      "Linear completion proof requires the configured Linear API key."
+    );
+  return completionContext({
+    ref,
+    contract,
+    prUrl,
+    run,
+    config: readConfig(),
+    repository: currentRepository(),
+    linear: (query, variables, purpose) =>
+      linearGraphql(token, query, variables, purpose),
+    declares(message, currentRef) {
+      if (contract.provider === "github")
+        return declaredWorkItemNumbers(message, ref.split("#")[0]).includes(
+          Number(currentRef.split("#")[1])
+        );
+      return workItemLines(message).some(value => {
+        try {
+          return canonicalizeRef(value, contract) === currentRef;
+        } catch (error) {
+          if (error instanceof TrackingError) return false;
+          throw error;
+        }
+      });
+    },
+    hasBacklink(issue, url) {
+      try {
+        assertBacklink(ref, url, contract, issue);
+        return true;
+      } catch (error) {
+        if (error instanceof TrackingError) return false;
+        throw error;
+      }
+    },
+  });
 }
 
 function completeWorkItem(ref, contract, prUrl) {
   if (contract.provider === "github") {
-    return completeGithubWorkItem(ref, contract);
+    return completeGithubWorkItem(ref, contract, prUrl);
   }
   if (contract.provider === "linear") {
     return completeLinearWorkItem(ref, contract, prUrl);
@@ -5318,10 +5800,53 @@ function complete(args) {
   // path has no such decision to report, so it keeps the original line.
   console.log(
     outcome.report ??
-      `work-item completed: ${ref} -> ${outcome.terminal} (merged: ${outcome.merged
+      `work-item ${outcome.category === ALREADY_COMPLETED ? ALREADY_COMPLETED : "completed"}: ${ref} -> ${outcome.terminal} (merged: ${outcome.merged
         .map(number => `#${number}`)
         .join(", ")})`
   );
+  if (
+    ["invalid-proof", COMPLETION_READ_ERROR, COMPLETION_WRITE_ERROR].includes(
+      outcome.category
+    )
+  )
+    process.exitCode = 1;
+}
+
+/** Publish a durable accepted-for-completion record without closing the item. */
+function publishProof(args) {
+  const contract = trackerContract();
+  if (!["github", "linear"].includes(contract.provider))
+    throw new TrackingError(
+      "Completion-proof publication supports github and linear; Jira completion remains unsupported."
+    );
+  const ref = canonicalizeRef(
+    option(args, "--ref", "LISA_WORK_ITEM_REF") ?? boundRef(),
+    contract
+  );
+  const file = option(args, "--record");
+  if (!file)
+    throw new TrackingError(
+      "publish-completion-proof requires --record <verified-record.json>"
+    );
+  const path = resolve(process.cwd(), file);
+  const metadata = lstatSync(path);
+  if (
+    !metadata.isFile() ||
+    metadata.size <= 0 ||
+    metadata.size > MAX_RECORD_BYTES
+  )
+    throw new TrackingError(
+      "The completion record must be a bounded, nonempty regular JSON file."
+    );
+  const input = safeJson(
+    readFileSync(path, "utf8"),
+    "Completion publication record"
+  );
+  const result = publishCompletionProof(
+    proofContext(ref, contract, pullRequestUrlOption(args)),
+    input
+  );
+  console.log(JSON.stringify(result));
 }
 
 /**
@@ -5404,7 +5929,7 @@ function openIssuesWithRole(repository, role) {
 /**
  * The first of `origin/<branch>` and `<branch>` that resolves to a commit.
  * @param {string} branch Configured deploy branch name.
- * @returns {string|undefined} A resolvable rev, or undefined.
+ * @returns {{ref: string, sha: string}|undefined} Selected ref and pinned commit, or undefined.
  */
 function resolvedBranchRev(branch) {
   for (const candidate of [`origin/${branch}`, branch]) {
@@ -5413,7 +5938,8 @@ function resolvedBranchRev(branch) {
       ["rev-parse", "--verify", "--quiet", `${candidate}^{commit}`],
       { allowFailure: true }
     );
-    if (result.status === 0 && result.stdout.trim() !== "") return candidate;
+    const sha = result.stdout.trim();
+    if (result.status === 0 && sha !== "") return { ref: candidate, sha };
   }
   return undefined;
 }
@@ -5492,6 +6018,32 @@ function resolvedSinceRev(since) {
 }
 
 /**
+ * Prove that a bounded push starts in the exact selected branch history.
+ * A resolvable but disjoint commit excludes nothing and can widen the sweep.
+ * @param {string} since Resolved pre-push commit.
+ * @param {{ref: string, sha: string}} revision Selected deploy revision.
+ */
+function assertSweepAncestor(since, revision) {
+  const result =
+    /** @type {import("node:child_process").SpawnSyncReturns<string>} */ (
+      run("git", ["merge-base", "--is-ancestor", since, revision.sha], {
+        allowFailure: true,
+      })
+    );
+  if (!result.error && result.status === 0) return;
+  const reason =
+    !result.error && result.status === 1
+      ? "is not an ancestor"
+      : "could not be verified as an ancestor";
+  throw new TrackingError(
+    `NOT DETERMINED: ${SINCE_FLAG} ${since} ${reason} of ${revision.ref} (${revision.sha}), ` +
+      `so the bounded sweep cannot reconcile any item.\n` +
+      `Fetch the selected branch's complete history (\`git fetch --unshallow origin\` for a shallow checkout), ` +
+      `verify its pre-push revision, and re-run. No completion mutations were attempted.`
+  );
+}
+
+/**
  * The sentence a report owes its reader when the scan was bounded.
  * @param {string | undefined} since The bound as supplied.
  * @param {string[]} branches Selected deploy branches.
@@ -5550,11 +6102,17 @@ function deployedDeclarations(repository, contract, since, branches) {
       unresolved.push(branch);
       continue;
     }
+    if (sinceRev) assertSweepAncestor(sinceRev, rev);
     const bound = sinceRev ? ["--not", sinceRev] : [];
-    const result = run("git", ["log", rev, ...bound, "-z", "--format=%H%n%B"], {
-      allowFailure: true,
-      maxBuffer: DECLARATION_LOG_MAX_BYTES,
-    });
+    const logRev = sinceRev ? rev.sha : rev.ref;
+    const result = run(
+      "git",
+      ["log", logRev, ...bound, "-z", "--format=%H%n%B"],
+      {
+        allowFailure: true,
+        maxBuffer: DECLARATION_LOG_MAX_BYTES,
+      }
+    );
     // Loudly, not `continue`. This sweep's whole output is an absence claim,
     // and a read that failed is not an absence — under the default 1 MiB
     // buffer the real `origin/main` log (4.6 MiB) was truncated into an
@@ -5564,7 +6122,7 @@ function deployedDeclarations(repository, contract, since, branches) {
     // least trustworthy one.
     if (result.error || result.status !== 0) {
       throw new TrackingError(
-        `could not read the commit log of ${rev}, so no absence of drift can be reported: ` +
+        `could not read the commit log of ${rev.ref}, so no absence of drift can be reported: ` +
           `${result.error ? result.error.message : result.stderr.trim() || "git log failed"}.\n` +
           `The sweep reports what a deploy branch declares; a log it could not read is not an empty one.`
       );
@@ -5967,6 +6525,7 @@ function pushGroups(input, remote) {
           commits: [],
           examinedScope: parsed[0]?.examinedScope ?? HEAD_FALLBACK_SCOPE,
           localRef: parsed[0]?.localRef,
+          remoteRef: parsed[0]?.remoteRef,
           // Empty on purpose: `ancestryUnreachable` asks a question OF A RANGE,
           // and there is no range here. `examinedScope` above is the separate,
           // human-readable answer to "what did this verdict look at".
@@ -6073,11 +6632,61 @@ export function unreachableAncestryRefusal(localRef) {
  */
 function prTargetGroup(groups, pr) {
   if (!pr) return undefined;
+  const destination = groups.find(
+    group =>
+      pr.headRefName && group.remoteRef === `${HEADS_PREFIX}${pr.headRefName}`
+  );
+  if (destination) return destination;
   if (groups.length === 1) return groups[0];
   const branch = activeBranch();
   return groups.find(
     group => branch && pushedBranchName(group.localRef ?? "") === branch
   );
+}
+
+/**
+ * Keep a stacked PR's inherited base work out of its body declaration.
+ *
+ * The raw push scope still governs ancestry validation. Only the matching
+ * child destination's declaration scope is intersected with the immutable base
+ * commit GitHub reported; other pushed branches and deploy bases retain their
+ * existing scope. An unavailable base refuses instead of guessing from a
+ * possibly stale local branch name.
+ * @param {object} group Raw pushed ref and its commits.
+ * @param {object|undefined} pr Current branch's pull request.
+ * @param {string} remote Push destination.
+ * @returns {object} The declaration scope for this push.
+ */
+function stackedPrPushGroup(group, pr, remote) {
+  if (
+    !pr?.baseRefName ||
+    deployBranchNames(remote).has(pr.baseRefName) ||
+    !pr.headRefName ||
+    group.remoteRef !== `${HEADS_PREFIX}${pr.headRefName}` ||
+    group.commits.length === 0
+  )
+    return group;
+  const base = pr.baseRefOid;
+  if (typeof base !== "string" || !/^[a-f0-9]{40}$/i.test(base))
+    throw new TrackingError(
+      "The stacked pull request's base commit could not be read. Refresh its GitHub metadata before pushing."
+    );
+  const available = run("git", ["cat-file", "-e", `${base}^{commit}`], {
+    allowFailure: true,
+  });
+  if (available.status !== 0)
+    throw new TrackingError(
+      "The stacked pull request's base commit is not available locally. Fetch the pull request's base branch, then push again."
+    );
+  // Put the exclusion before any --not toggle in the original argv. This
+  // preserves the existing incremental range and avoids walking the whole PR.
+  const scope = ["rev-list", `^${base}`, ...group.scope.slice(1)];
+  return {
+    ...group,
+    commits: git(scope).split("\n").filter(Boolean),
+    examinedScope: `${group.examinedScope}; excluding PR base ${abbreviate(base)}`,
+    scope,
+  };
 }
 
 /**
@@ -6244,7 +6853,11 @@ function validatePush(args) {
   // anything, but so could a `--no-verify`; CI is the enforcing copy.
   const configRef = remoteDefaultRef(remote);
   const groups = pushGroups(input, remote);
-  const pr = currentPullRequest();
+  const pr = currentPullRequest(
+    undefined,
+    undefined,
+    "url,body,state,baseRefName,baseRefOid,headRefName"
+  );
   const target = prTargetGroup(groups, pr);
   for (const group of groups) {
     // BEFORE the commits are judged, not after: every verdict below is computed
@@ -6253,12 +6866,17 @@ function validatePush(args) {
     // produced a refusal naming a stranger's closed ticket (#3719).
     if (ancestryUnreachable(group, remote))
       throw unreachableAncestryRefusal(group.localRef);
-    const outcome = commitOutcome(group.commits, configRef, remote);
+    const declaration = stackedPrPushGroup(
+      group,
+      group === target ? pr : undefined,
+      remote
+    );
+    const outcome = commitOutcome(declaration.commits, configRef, remote);
     reportPushGroup(
       outcome,
       group === target ? pr : undefined,
       groups.length > 1 ? `${group.localRef ?? "(stdin)"}: ` : "",
-      group.examinedScope
+      declaration.examinedScope
     );
   }
 }
@@ -6494,10 +7112,11 @@ function main() {
   if (command === "validate-push") return validatePush(args);
   if (command === "validate-push-destination")
     return validatePushDestination(args);
+  if (command === "publish-completion-proof") return publishProof(args);
   if (command === "validate-pr") return validatePr(args);
   if (command === DISCHARGE_COMMAND) return dischargePrGates(args);
   throw new TrackingError(
-    "Usage: lisa-work-item.mjs link|current|attach-branch|clear|verify-level|contract-version|backlink|complete|sweep|lane|prepare-commit-msg|validate-commit|validate-push|validate-push-destination|validate-pr|discharge-pr-gates" +
+    "Usage: lisa-work-item.mjs link|current|attach-branch|clear|verify-level|contract-version|backlink|publish-completion-proof|complete|sweep|lane|prepare-commit-msg|validate-commit|validate-push|validate-push-destination|validate-pr|discharge-pr-gates" +
       "\n(`bind` is accepted as an alias for `link`, but some agent harnesses refuse the token `bind` in a command line.)"
   );
 }
@@ -6517,6 +7136,14 @@ export function runCli() {
     main();
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+    if (error instanceof CompletionProofError) {
+      console.error(`work-item proof ${error.category}: ${detail}`);
+      const pendingLifecycle =
+        error.category === "pending-proof" &&
+        ["complete", "sweep"].includes(process.argv[2]);
+      process.exitCode = pendingLifecycle ? 0 : 1;
+      return;
+    }
     console.error(
       error?.selfExplanatory === true
         ? `\n❌ ${detail}\n`

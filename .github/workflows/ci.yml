@@ -18,11 +18,16 @@ jobs:
       contents: read
       issues: read
       pull-requests: read
-    uses: CodySwannGT/lisa/.github/workflows/quality.yml@995f533b00d9b8a60256096bf6d28940164cd893 # v4.69.1
+    uses: CodySwannGT/lisa/.github/workflows/quality.yml@f200685b372467c8769ad62113760e9542e597d5 # v4.87.14
     with:
       node_version: '22.21.1'
       package_manager: 'bun'
       skip_jobs: ''
+      # Folds workflow-compatibility and declared-gate planning into the
+      # preallocation job instead of paying for separate jobs. Not set by any
+      # Lisa caller template — it is adopted per repo, and every other
+      # quality.yml caller in this portfolio already passes it.
+      combine_planning_checks: true
     secrets:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}

@@ -3,6 +3,8 @@ name: lisa-plan
 description: "Decompose a single PRD or…"
 allowed-tools: ["Skill", "Bash", "Read", "Glob", "Grep"]
 ---
+Decompose a single PRD or specification into ordered work items in the configured tracker. Vendor-agnostic — the source can be a Notion PRD URL, a Confluence PRD URL, a Linear project URL, a GitHub Issue URL, an existing JIRA epic key, a markdown file, or a free-form description; the destination tracker is whatever the project is configured to use via `.lisa.config.json` `tracker` (JIRA, GitHub Issues, or Linear). Single-PRD mode only — for batch scanning of all Ready PRDs in a queue, use the lisa-intake skill.
+
 
 # Plan: $ARGUMENTS
 
@@ -58,6 +60,8 @@ If no PRD or specification exists, suggest running the `lisa-research` skill fir
 ## Flow
 
 Execute the **Plan** flow as defined in the `intent-routing` rule (loaded via the lisa plugin). The rule contains the canonical step sequence (gates, sub-flows, output structure). This skill does NOT restate flow steps — change them in the rule, propagate everywhere.
+
+**Learned planning checks.** Whichever source skill runs the decomposition, it runs `lisa-task-decomposition` step 0 first: the `Planning (prd|decomposition|ready-gate)` checks that `learning-judge` persisted each time a dispatched worker still had to stop for a human or file a ticket mid-build, loaded through the learnings contract's bounded projection. For a file or plain-text spec, run that step yourself before decomposing. Planning that ignores them repeats the gap that stopped the last worker.
 
 ## Output
 

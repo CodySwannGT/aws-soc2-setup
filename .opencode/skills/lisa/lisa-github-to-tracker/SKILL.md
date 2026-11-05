@@ -3,6 +3,8 @@ name: lisa-github-to-tracker
 description: "Break down a GitHub Issue PRD…"
 allowed-tools: ["Skill", "Bash", "Read"]
 ---
+Break down a GitHub Issue PRD into Epics, Stories, and Sub-tasks in the configured destination tracker (JIRA via lisa-tracker-write → lisa-jira-write-ticket, or GitHub Issues itself via lisa-tracker-write → lisa-github-write-issue). Use this skill whenever the user shares a GitHub issue URL and wants it converted into tickets, or asks to "break down this GitHub PRD", "create tickets from a GitHub issue", or similar. This skill mirrors lisa-notion-to-tracker / lisa-confluence-to-tracker / lisa-linear-to-tracker for projects whose PRDs live in GitHub Issues — the workflow, gates, dry-run mode, and validation rules are identical; only the source-of-truth tool surface differs (the `gh` CLI instead of Notion / Confluence / Linear MCP).
+
 
 # GitHub PRD to Tracker Breakdown
 
@@ -219,6 +221,11 @@ planning proceeds. Per atom:
   requirement.
 - **Pattern shape (SHOULD)** — an EARS pattern (ubiquitous / When / While / If-then / Where) or an
   equivalent single-behavior sentence; conforming shapes decompose into Gherkin mechanically.
+- **Learned planning checks** — load the `Planning (...)` checks through the bounded projection
+  (`lisa-task-decomposition` step 0). Test the register against every `Planning (prd)` check; an
+  atom or a missing atom that fails one is a `product-clarity` item quoting the check, exactly
+  like the failures above. Carry the `Planning (decomposition)` checks into Phases 3–5. Each is
+  a gap a dispatched worker once had to stop and ask about, so catching it here is the point.
 
 Failures here are **requirement-level product clarifications**, not internal errors: report each in
 the dry-run report as a `product-clarity` item quoting the atom verbatim, naming the defect, and

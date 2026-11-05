@@ -3,6 +3,8 @@ name: lisa-automation-status
 description: "Read-only operator surface for…"
 allowed-tools: ["Skill", "Bash", "Read"]
 ---
+Read-only operator surface for the current project's Lisa automation fleet. Resolves the expected recurring jobs from the same setup-automations contract Lisa uses to create them, inspects the active runtime scheduler (Codex automations or Claude /schedule), compares live command/cadence/queue arguments against the expected contract, and reports grouped fleet health such as healthy, missing, unsupported, drifted, stale, or failing with remediation guidance.
+
 
 # Automation Status: $ARGUMENTS
 
@@ -30,6 +32,16 @@ as `learningsAudit` when resolving the fleet. A `lisa-auto-<project>-learnings-a
 scheduler means the project opted in, so the gardener is compared like any other loop; no such entry
 means it is reported `UNSUPPORTED` (opted out), never `MISSING`. This skill stays read-only — it
 infers, it never writes the flag anywhere.
+
+**Locally hosted loops.** When `.lisa.config.json` has a `sessionManager` block, the resolved fleet
+carries one extra opt-in entry, `session-manager`, reported `UNSUPPORTED`. That status is honest:
+`/lisa:setup:session-manager` hosts the manager as a `/loop` in a local tmux session, not on this
+runtime's scheduler, so `/schedule` or Codex automations will never list it, and it is neither
+`MISSING` nor provably `HEALTHY` from here. The manager records every cycle through
+`automation-run-record.mjs` under loop id `session-manager`, so the row still shows its runbook
+(`.lisa/automations/session-manager.runbook.md`), last outcome and history. Pass the entry's reason
+through to the operator: it names the tmux session and says to check liveness with
+`/lisa:session-manager status`. With no `sessionManager` block the entry does not exist.
 
 Resolve the expected project identifier, fleet naming prefix, queue arguments, cadence, and stack-support rules from the same contract used by `setup-automations` and `tear-down-automations`. Do **not** invent a second source of truth for fleet naming or queue resolution.
 

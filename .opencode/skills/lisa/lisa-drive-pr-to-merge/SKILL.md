@@ -3,6 +3,8 @@ name: lisa-drive-pr-to-merge
 description: "drive a pull request all the…"
 allowed-tools: ["Bash", "Read", "Edit", "Write", "Grep", "Glob", "Skill"]
 ---
+This skill should be used to drive a pull request all the way to MERGED, handling ANYTHING that blocks the merge. It enables auto-merge when the repo supports it (direct-merge fallback otherwise), keeps the branch rebased/synced and resolves merge conflicts, fixes failing CI/deploy checks, addresses and resolves every human and bot review comment (CodeRabbit, etc.) — implementing valid feedback and replying-then-resolving invalid feedback — dismisses stale CHANGES_REQUESTED gates, and verifies the fix actually shipped — both merge ancestry and that a deploy/release run fired for the merge SHA (auto-merge race + zero-deploy-run check). Composable and inline — invoked by other skills (e.g. git-submit-pr, implement, sync-down) via the Skill tool, never as a standalone user command.
+
 
 # Drive PR to Merge
 
@@ -391,15 +393,16 @@ declared, arm normally (the scope rule above). Where one IS declared, absent a
 description that positively states a review ran, treat the context as vacuous.
 Fail closed: absence of evidence is not evidence of a review.
 
-#### Vacuous and transient are different properties
+#### Vacuous, transient or standing: the response is the same
 
-A vacuous context is not automatically something to wait out, and this is the
-distinction a naive wait-and-arm gets wrong — it waits forever on a repository
-where the state never clears. **Only the rate limit has both properties.**
+A vacuous context is never something to wait out. Waiting looks like progress
+but it is a stall, and on a repository where the state never clears it waits
+forever. Some vacuities clear on their own and some do not. **That changes what
+the report says, not what you do:**
 
 | description | vacuous? | clears on its own? |
 | --- | --- | --- |
-| `Review rate limited` | yes | **yes** — a throughput window |
+| `Review rate limited` (and decorated forms such as `Review rate limited (retry in 12m)`) | yes | eventually — a throughput window of unknown length |
 | `Review skipped: manual review required for this OSS repository` | yes | **no** — a standing vendor policy for public repositories |
 | `Review skipped: N files exceed the limit of M` | yes | **no** — not without splitting the pull request |
 | `Review skipped` (bare, no stated reason) | yes | **unknown — treat as standing** |
@@ -408,17 +411,33 @@ A bare skip carries no machine-readable reason, so nothing distinguishes it from
 the standing forms. Requiring a stated reason before treating a skip as vacuous
 is how the commonest form gets missed.
 
-- **Transient (the rate limit, and only the rate limit)** — do not arm yet. Wait
-  the window out and re-request the review **at most once**, then re-classify.
-  If it now proves work, arm. If it does not, stop and treat it as standing.
-  **Never loop**: a retry loop re-triggers the very limit it is escaping, and
-  measured on #3220 a single explicit re-request in this repository was
-  acknowledged, went `Review in progress`, and settled back at
-  `Review rate limited` two seconds later having reviewed nothing — minting a
-  second hollow green. One attempt, then report.
-- **Standing** — do not wait at all, and do not re-request. There is no window
-  to wait out, so waiting produces a stall that reads as progress. Go straight
-  to the watch loop and let step (d) adjudicate the merge in the open.
+**Every row, the rate limit included: do not wait, and do not re-request.** Do
+not arm. Go straight to the watch loop, run the local adversarial review over the
+PR diff at the current head **now**, post it with the substitute marker (step
+(d), "In case 3, substitute"), and keep driving. Fix what it finds, substitute
+again on each new head, and let step (d) merge when the vacuous context is the
+sole remaining gate.
+
+The rate limit used to get a wait-the-window-out-and-re-request-once exception.
+That exception is removed, for three reasons:
+
+- **The window is not short.** Agents waiting it out stalled for an hour or more
+  per pull request, across a whole portfolio of repositories, and nothing about
+  the wait made the merge safer than a substitute review would.
+- **Re-requesting does not work under a throttle.** Measured on #3220, a single
+  explicit re-request was acknowledged, went `Review in progress`, and settled
+  back at `Review rate limited` two seconds later having reviewed nothing. That
+  minted a second hollow green.
+- **Re-requesting destroys evidence.** It overwrites the existing status (see
+  "Never re-request a review to 'refresh' it" in step (d)), so the exception
+  contradicted a rule this file states with no exceptions.
+
+If the reviewer later reviews on its own, nothing special happens. Its threads
+are review threads like any other, and step (d) handles them. A `CHANGES_REQUESTED`
+it leaves is a real blocker (step (e)), and the substitute never overrides it.
+If it now proves work, arm, per the table above. That is a re-classification
+the watch loop makes on what it reads anyway. It is never a reason to wait or
+re-request.
 
 #### A latch somebody else armed
 
@@ -582,9 +601,54 @@ sails through the arm gate and the latch goes on over the top of it.
 **Read `reviewDecision` explicitly. Never infer it from a check count.**
 
 ```bash
-gh pr view <pr> --json reviewDecision,reviewThreads \
-  --jq '{decision: .reviewDecision, unresolved: [.reviewThreads[]? | select(.isResolved == false)] | length}'
+review_pages=$(gh api graphql --paginate --slurp \
+  -F owner=<owner> -F repo=<repo> -F pr=<pr> \
+  -f query='query($owner:String!,$repo:String!,$pr:Int!,$endCursor:String){
+    repository(owner:$owner,name:$repo){pullRequest(number:$pr){
+      state reviewDecision autoMergeRequest{enabledAt}
+      reviewThreads(first:100,after:$endCursor){
+        nodes{isResolved isOutdated}
+        pageInfo{hasNextPage endCursor}
+      }
+    }}
+  }') || {
+  printf '%s\n' 'Could not read PR review threads; merge readiness is unknown.' >&2
+  exit 1
+}
+printf '%s\n' "$review_pages" | jq -e '
+  def complete_page:
+    try (
+      ((.errors // []) | length) == 0 and
+      (.data.repository.pullRequest | . as $pr |
+        has("state") and has("reviewDecision") and has("autoMergeRequest") and
+        (["OPEN", "CLOSED", "MERGED"] | index($pr.state)) != null and
+        ([null, "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"] |
+          index($pr.reviewDecision)) != null and
+        (.autoMergeRequest == null or
+          (.autoMergeRequest.enabledAt | type) == "string") and
+        (.reviewThreads.nodes | type) == "array" and
+        all(.reviewThreads.nodes[];
+          (.isResolved | type) == "boolean" and (.isOutdated | type) == "boolean") and
+        (.reviewThreads.pageInfo.hasNextPage | type) == "boolean")
+    ) catch false;
+  if type != "array" then
+    error("Incomplete PR review response; merge readiness is unknown")
+  elif length == 0 or any(.[]; complete_page | not) or
+    .[-1].data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage != false
+  then error("Incomplete PR review response; merge readiness is unknown")
+  else {
+    state: .[-1].data.repository.pullRequest.state,
+    armed: (.[-1].data.repository.pullRequest.autoMergeRequest != null),
+    decision: .[-1].data.repository.pullRequest.reviewDecision,
+    unresolved: ([.[].data.repository.pullRequest.reviewThreads.nodes[] |
+      select(.isResolved == false)] | length)
+  } end'
 ```
+
+`reviewThreads` is a GraphQL connection, not a supported `gh pr view --json`
+field. Read every page, including outdated threads that remain unresolved.
+If either the API request or response validation fails, stop with the diagnostic
+above; a failed read must never become a count of zero unresolved threads.
 
 `reviewDecision` is **not part of `statusCheckRollup`**. That is the whole reason
 this stayed invisible: a failing-check count reads **zero** on a PR that can
@@ -597,17 +661,24 @@ step (e) first — which discriminates a live objection from a stranded one by
 unresolved thread count, not by `reviewDecision` — and arm afterwards.
 
 **Two ruleset settings decide whether a standing verdict ever clears itself, and
-in this repository both say no.** Verify them for the repo you are in rather
-than assuming, with `gh api repos/<owner>/<repo>/rulesets`:
+neither one clears a change request.** Verify them for the repo you are in
+rather than assuming, with `gh api repos/<owner>/<repo>/rules/branches/<base>`
+(the rules in force on the base branch, with their parameters; the
+`gh api repos/<owner>/<repo>/rulesets` list carries no rule parameters):
 
-- `dismiss_stale_reviews_on_push: false` — the review stays attached to the
-  commit it was made on, so **pushing the fix never clears it**. The intuition
-  that a new head resets the verdict is wrong here.
+- `dismiss_stale_reviews_on_push` dismisses stale **approvals** only. The `base`
+  ruleset Lisa generates defaults it to `true` when
+  `policy.protect.dismiss_stale_reviews` is undeclared, and keeps a declared
+  value (CodySwannGT/lisa#4574), but a
+  `CHANGES_REQUESTED` review made on an older head stays in force after a push
+  under either setting (measured on a probe repository on 2026-11-01: the push
+  changed the diff and `reviewDecision` stayed `CHANGES_REQUESTED`), so
+  **pushing the fix never clears it**.
 - `required_approving_review_count: 0` — no approval is required to merge, so a
   standing `CHANGES_REQUESTED` is not holding a slot for a review that would
   otherwise arrive. Nothing is scheduled to clear it.
 
-Together those mean the block is **indefinite, not slow**. Waiting is not a
+Where both hold, the block is **indefinite, not slow**. Waiting is not a
 strategy; something has to act.
 
 **Unresolved threads block independently of the verdict.** This repository sets
@@ -884,13 +955,30 @@ resolve every thread via `resolveReviewThread` so the branch-protection
 thread-resolution gate clears.
 
 **A green review check is not proof a review happened.** A third-party review
-app posts a **commit status** on the PR head; when it is throttled or declines,
-it still reports `success` and never blocks. Only the status **description**
-tells the two apart. Measured over the last 30 merged PRs in one repository: 24
-of 30 merges passed a required review gate that had reviewed nothing, every one
-of them `success`. A second repository sampled `success` on 50 of 50.
+app reports on the PR head through a **check run** or a **commit status**, and
+one app can move from the second to the first without notice: measured in one
+repository, its reviewer stopped posting statuses between 2026-10-26 and
+2026-10-27 and has reported only as a check run since. When it is throttled or
+declines it never blocks — a status still reports `success`, and a check run
+concludes `neutral`, which GitHub counts as passing a required check. Only the
+reviewer's own words tell the two apart. Measured over the last 30 merged PRs in
+one repository: 24 of 30 merges passed a required review gate that had reviewed
+nothing. A second repository sampled `success` on 50 of 50.
 
-**Read the description from the commit status API, never from the rollup.**
+**Read the words from the reviewer's own API object, never from the rollup.**
+A check run's title is often a generic `Finished`; its result is the **first
+line of its summary** — `Result: Success - Review completed` when a review
+completed, `Result: Rate limited - Review rate limited` when it was throttled.
+Filter by name — the `?check_name=<context>` filter, sent as a field so a name
+with spaces is encoded for you — because a head commonly carries more check
+runs than one unfiltered page returns:
+
+```bash
+gh api -X GET 'repos/<owner>/<repo>/commits/<head-sha>/check-runs' -f check_name='<context>' \
+  --jq '.check_runs[] | {id, name, head_sha, status, conclusion, app: .app.id, title: .output.title, result: ((.output.summary // "") | split("\n")[0])}'
+```
+
+A commit status carries its words in its description, and
 `gh pr view --json statusCheckRollup` returns a `StatusContext` with **no
 `description` key at all** — verified — so a hollow green is invisible there:
 
@@ -900,35 +988,56 @@ gh api repos/<owner>/<repo>/commits/<head-sha>/status \
 ```
 
 For a quick human look at one context, `gh pr checks <pr> --json name,state,description,bucket`
-prints the same description — but the prover and CI read the commit-status API,
-because `gh pr checks` resolves the rollup through the workflow run and exits
-non-zero with EMPTY stdout when it lacks `actions: read`, which reads as a
-content problem and never says "permission".
+prints a status's description, but its description column is EMPTY for a check
+run — it shows neither the run's title nor its summary — so it can never tell
+you a check run reviewed anything. The prover and CI read the two APIs above
+instead, because `gh pr checks`
+resolves the rollup through the workflow run and exits non-zero with EMPTY
+stdout when it lacks `actions: read`, which reads as a content problem and
+never says "permission". Reading a check run needs `checks: read`.
 
 **Which reviewers to read is configuration, never a vendor name.** Each gate in
 `.lisa.config.json` that declares `evidence.reviewer: true` on its
-`pull-request` moment names one third-party reviewer: `await` is its status
-context, and `evidence.proof` is the exact **reviewed-when** description. The
-shipped prover resolves them and returns the whole verdict:
+`pull-request` moment names one third-party reviewer: `await` is the status
+context or check-run name it reports under, `posted_by` (when declared) is the
+app whose check run counts, and `evidence.proof` is the exact **reviewed-when**
+phrase. The shipped prover reads both representations and returns the whole
+verdict. Take the verdict from it, not from your own reading of the payloads
+above:
 
 ```bash
-node scripts/check-third-party-review-evidence.mjs --sha <head-sha> --json
+node scripts/check-third-party-review-evidence.mjs --sha <head-sha> --repo <owner>/<repo> --json
 ```
 
-Three cases, and each is handled differently:
+Pass the owning PR's repository explicitly in local checkouts. Without
+`--repo` or a valid `GITHUB_REPOSITORY`, the prover exits with a usage error
+before reading GitHub; this is not a review verdict.
 
-1. **`satisfied`** — every configured reviewer's description matched its
-   reviewed-when phrase. Nothing further; record `reviewed` and the phrase.
+**First, stop on `pull-requests-unreadable`.** The PR discovery read failed,
+so the head's review status is **unknown**. `readings: []` in this outcome is
+not a reviewer saying it did no work. Report the failed pull-request read and
+stop under `tool-access-gate`, keeping the PR open and every check enabled.
+Do not post a reviewer-specific substitute or make a merge decision from this
+outcome. Restore the configured GitHub read access before rerunning the prover;
+this instruction adds no automatic retry loop.
+
+For the remaining outcomes, three cases are handled differently:
+
+1. **`satisfied`** — every configured reviewer showed its reviewed-when
+   evidence: a status whose description is the phrase, or a check run that
+   completed with `success` and whose first summary line is the completed
+   result. Nothing further; record `reviewed` and the words it observed.
 2. **`no-reviewer-configured`** — no gate declares one. This is a legitimate
    state, **not** a pass: say so explicitly in the report ("no third-party
    reviewer configured; nothing read this diff on that path"), and do not
    invent a substitute for a reviewer the project never asked for.
-3. **anything else** — throttled, skipped, absent, empty, or a description in
-   no configured list. **Treat every one of these as NOT REVIEWED.** The
-   allowlist is the only thing that grants credit; a denylist of known-bad
-   phrases fails open, and the vocabulary is open-ended — four distinct strings
-   are known already, from two repositories. An unrecognised string costs an
-   extra local review, never a free pass.
+3. **anything else** — throttled, skipped, absent, empty, unreadable reviewer
+   evidence after successful PR discovery, a check
+   run that did not succeed, or words in no configured list. **Treat every one
+   of these as NOT REVIEWED.** The allowlist is the only thing that grants
+   credit; a denylist of known-bad phrases fails open, and the vocabulary is
+   open-ended — four distinct strings are known already, from two repositories.
+   An unrecognised string costs an extra local review, never a free pass.
 
 **In case 3, substitute — do not block, and do not wait.** Before merging, run
 the local adversarial review over the PR diff and **post it on the PR**, so the
@@ -938,13 +1047,15 @@ code that merges has been read by something. The comment must:
   as its first line, so CI can find it for this reviewer at this head;
 - state plainly that it is a **self-review substitute**, not a third-party
   review;
-- **record the actual description string observed, verbatim**, so the trail says
-  *why* it was substituted rather than only that it was;
+- **record the actual words observed, verbatim** — the prover's `observed`: a
+  status's description, or a check run's title or first summary line — so the
+  trail says *why* it was substituted rather than only that it was;
 - **name the observed condition, not a guessed cause.** The prover returns a
   `reading` per reviewer and a sentence for it; copy that sentence in. In
   particular `absent` must read as *no third-party status was present at this
   head at all* — an operator seeing an empty pair of quotes cannot tell that
-  apart from a status whose description was blank.
+  apart from a status whose description was blank — and `unreadable` must read
+  as a read that failed, never as an absence.
 
 **Several different causes produce the same reading, and you cannot tell them
 apart from here.** A quota throttle, a per-repository decline, and **auto-review
@@ -1000,11 +1111,12 @@ directions and must agree: the prover says whether the context did work, and the
 configured reviewed-when phrase says what "did work" looks like for this
 project.
 
-Prove the signal from the commit status API as above; a merely pending or queued
-check is not proof of anything and must keep polling. **A transient vacuity is not adjudicated here until the arm gate's
-single wait-and-re-request has been spent** (section 1): a rate limit has a
-window, and merging past one you never waited out is a choice you did not have
-to make. A standing vacuity has no window, so it arrives here immediately.
+Prove the signal from the check-run or commit-status API as above; a
+merely pending or queued check is not proof of anything and must keep polling. **A settled vacuity, the
+rate limit included, arrives here immediately.** There is no wait to spend first
+and no re-request to try: a rate limit's window is of unknown length, and
+waiting it out stalls the pull request without reading a line of the diff. The
+substitute is what makes the merge safe, not the passage of time.
 
 Once the signal is explicit, merge directly with `gh pr merge <pr>
 --<merge_method>` (pass `--admin` only if branch protection lists the vacuous
@@ -1031,11 +1143,12 @@ from memory:
 - `mergeable == MERGEABLE` and `mergeStateStatus` is not `BEHIND`/`DIRTY`;
 - no pending auto-fix PR into this branch (step f).
 
-**A review OBJECT is not a status CONTEXT.** Everything above is about status
-descriptions. An **empty-bodied `APPROVED` review is an ordinary approval** and
-is never hollow — do not let empty-description reasoning leak onto review
-objects. A `CHANGES_REQUESTED` is a blocking objection **whatever its body**,
-because its content commonly lives entirely in inline threads.
+**A review OBJECT is not a status CONTEXT.** Everything above is about the
+words a status or check run reports. An **empty-bodied `APPROVED` review is an
+ordinary approval** and is never hollow — do not let empty-description
+reasoning leak onto review objects. A `CHANGES_REQUESTED` is a blocking
+objection **whatever its body**, because its content commonly lives entirely in
+inline threads.
 
 **Filter review objects on `commit_id == head`, in BOTH directions.** Writing the
 filter for one direction only is the easy bug, and each direction fails a
@@ -1124,6 +1237,34 @@ gh api "repos/<owner>/<repo>/pulls/<pr>/reviews" \
 Deleting the fallback outright would over-correct: it is the only remedy a lane
 without dismissal permission has, and that permission is not universal. This
 narrows it to the case that costs nothing.
+
+**A stale bot verdict under a rate limit: substitute, then stop and report.**
+Under a rate limit or an exhausted review allowance, a bot's old
+`CHANGES_REQUESTED` on an outdated head can end up as the only thing blocking
+the merge. The bot cannot post a fresh review to replace it, so the verdict
+will not clear by itself while the throttle lasts. This was measured on a
+caller repo in the portfolio: every check green, zero unresolved threads, and
+the bot's verdict from an earlier head as the only blocker. In that case:
+
+1. **Do not wait for the window to reset, and do not re-request.** Waiting
+   leaves the pull request wedged for an hour or more. A re-request under the
+   throttle settles hollow and can take away the bot's standing review (see
+   above).
+2. Post the local adversarial review substitute for the **current** head, as
+   step (d) case 3 describes, if one is not already there.
+3. **Then stop** with `blocked:stale-bot-verdict` (section 4). Report exactly
+   that blocker: the bot reviewer, the review id, the outdated head it reviewed
+   and the current head, the unresolved thread count, and that the substitute
+   is posted for the current head. Name the decision that is needed: a human
+   with dismissal rights dismisses that review, or decides it must stand.
+
+Do not dismiss it on the strength of your own substitute. Here the bot's review
+is the only third-party review on the pull request. Dismissing it because of a
+review this run wrote would make the agent both author and judge of the change.
+That is the escalation the bullet above requires, reached right away instead of
+after a wait. A stranded verdict that is **not** the only substantive review, or
+one left by a reviewer that is not throttled, is still handled by the
+dismissal rule above.
 
 **Unverified, and stated as such rather than asserted:** that a bot's re-review
 REPLACES its predecessor in the effective set is inferred from the observed
@@ -1308,7 +1449,8 @@ Four properties make the command safe to run unconditionally:
    above does, and for the same reason. A merged pull request is not evidence
    on its own: the writer resolves `<baseRefName>` through `.lisa.config.json`
    `deploy.branches` and applies only the role that base earned. A merge into
-   the production deploy branch is terminal and closes the item; a merge into a
+   the production deploy branch becomes eligible for terminal completion only
+   after canonical accepted-for-completion proof passes; a merge into a
    branch mapping to a lower env records that env's role and leaves the item
    open; a merge into a branch the project does not deploy at all — an
    integration/stack branch — records nothing, closes nothing, and reports the
@@ -1329,6 +1471,19 @@ is closed *and* still reports as in progress.
 If the command refuses, do not close by hand. A refusal means the evidence is
 not there, and a lifecycle step performed by hand is one nothing can verify
 happened.
+
+`work-item pending-proof` is a normal nonterminal outcome: the merge does not
+prove the configured whole delivery run, runtime behavior, typed attachments,
+CONFORMS, canonical Verify usage, exact linkage and acceptance. Keep the item
+owned/open, finish canonical Verify and `lisa-tracker-evidence`, and use its
+shipped `publish-completion-proof` producer after actual uploads/readbacks.
+Then retry canonical completion. Read the sibling skill companion
+`../lisa-tracker-evidence/references/completion-authorization.md` relative to this
+skill directory; it is the portable `completion-authorization` reference.
+Publish an immutable required pending-state journey artifact first; append the
+real native terminal readback/acceptedAt afterward. Never require the future
+close event as its own authorization. A configured bot publisher's still-running
+pinned attempt keeps completion pending until that exact attempt succeeds.
 
 **The backstop, for the ones that still slip:** `lisa-work-item.mjs sweep`
 reports every open item — in the **ready** lane as well as the **claimed** one —
@@ -1394,7 +1549,7 @@ Loop until one of:
   the mode forbids acting on them: `on_blocker=report`). The latch is
   deliberately not armed, so the PR sits OPEN rather than merging on a review
   nothing performed. Report the PR URL, the review context's settled
-  description, whether it is transient or standing, and which sole-gate
+  description, whether it clears on its own (a rate limit) or is standing, and which sole-gate
   condition failed. This is an outcome that needs an operator, stated in one
   line a non-technical reader can act on — for example: *"PR #123 is ready to
   merge but nobody reviewed it: the review tool says it skips public
@@ -1424,6 +1579,16 @@ Loop until one of:
   — but a review asked for changes and that is still on record, so it will sit
   there forever. Someone needs to clear that review or resolve the open
   comments."* Never report this PR as merging.
+- **`blocked:stale-bot-verdict`** — the only thing blocking the merge is a
+  bot's `CHANGES_REQUESTED` on an outdated head, the bot is rate limited or out
+  of review allowance so it cannot replace that verdict, and the local
+  adversarial review substitute is posted for the current head (step (e)).
+  Report the reviewer, the review id, both heads, the unresolved thread count,
+  and the dismissal decision a human needs to make. For example: *"PR #123 is
+  ready except for an old review from the review bot on an earlier version. The
+  bot is rate limited and cannot re-review, and I posted my own review of the
+  current version. Someone with dismissal rights needs to dismiss review 456,
+  or decide it should stand."* Do not wait for the bot's window to reset.
 - **`CLOSED`** → report (PR was closed without merge).
 - **Hard block needing a human**: an unresolvable conflict, a failing check that
   needs design input, or genuine unresolved human objection (not a bot gate). Stop
@@ -1440,9 +1605,48 @@ states above, but any point where this run concludes it is finished, hands back,
 or gives up. Re-read, from the live PR, immediately before reporting:
 
 ```bash
-gh pr view <pr> --json state,autoMergeRequest,reviewDecision,reviewThreads \
-  --jq '{state, armed: (.autoMergeRequest != null), decision: .reviewDecision,
-         unresolved: [.reviewThreads[]? | select(.isResolved == false)] | length}'
+review_pages=$(gh api graphql --paginate --slurp \
+  -F owner=<owner> -F repo=<repo> -F pr=<pr> \
+  -f query='query($owner:String!,$repo:String!,$pr:Int!,$endCursor:String){
+    repository(owner:$owner,name:$repo){pullRequest(number:$pr){
+      state reviewDecision autoMergeRequest{enabledAt}
+      reviewThreads(first:100,after:$endCursor){
+        nodes{isResolved isOutdated}
+        pageInfo{hasNextPage endCursor}
+      }
+    }}
+  }') || {
+  printf '%s\n' 'Could not read PR review threads; merge readiness is unknown.' >&2
+  exit 1
+}
+printf '%s\n' "$review_pages" | jq -e '
+  def complete_page:
+    try (
+      ((.errors // []) | length) == 0 and
+      (.data.repository.pullRequest | . as $pr |
+        has("state") and has("reviewDecision") and has("autoMergeRequest") and
+        (["OPEN", "CLOSED", "MERGED"] | index($pr.state)) != null and
+        ([null, "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"] |
+          index($pr.reviewDecision)) != null and
+        (.autoMergeRequest == null or
+          (.autoMergeRequest.enabledAt | type) == "string") and
+        (.reviewThreads.nodes | type) == "array" and
+        all(.reviewThreads.nodes[];
+          (.isResolved | type) == "boolean" and (.isOutdated | type) == "boolean") and
+        (.reviewThreads.pageInfo.hasNextPage | type) == "boolean")
+    ) catch false;
+  if type != "array" then
+    error("Incomplete PR review response; merge readiness is unknown")
+  elif length == 0 or any(.[]; complete_page | not) or
+    .[-1].data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage != false
+  then error("Incomplete PR review response; merge readiness is unknown")
+  else {
+    state: .[-1].data.repository.pullRequest.state,
+    armed: (.[-1].data.repository.pullRequest.autoMergeRequest != null),
+    decision: .[-1].data.repository.pullRequest.reviewDecision,
+    unresolved: ([.[].data.repository.pullRequest.reviewThreads.nodes[] |
+      select(.isResolved == false)] | length)
+  } end'
 ```
 
 If `state == OPEN` and `armed` and either `decision == "CHANGES_REQUESTED"` or
@@ -1493,7 +1697,8 @@ declare none, one, or several, and each shows its own evidence.
 
 Quote the description that was actually read. A report that says "rate limited"
 on a policy skip is a wrong record, and the two call for different operator
-actions: one clears itself, the other never will.
+actions: one clears itself, the other never will. Neither changes what this
+skill does in the meantime: it substitutes and keeps driving in both cases.
 
 `NOT REVIEWED` is reporting, and on a merged PR it is never a terminal state of
 its own: it does not turn a merged PR into a blocked one. What it does gate is

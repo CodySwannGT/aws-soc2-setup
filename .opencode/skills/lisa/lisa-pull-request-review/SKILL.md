@@ -3,6 +3,8 @@ name: lisa-pull-request-review
 description: "address and resolve the code…"
 allowed-tools: ["Read", "Bash", "Edit", "Write", "Glob", "Grep", "Skill"]
 ---
+This skill should be used to address and resolve the code review feedback on a pull request — human and bot (CodeRabbit, etc.). It fetches every unresolved review thread with its resolution state via GraphQL, triages each one, implements valid feedback (commit + push), replies to invalid/not-applicable feedback explaining why, and resolves every handled thread via the GraphQL resolveReviewThread mutation so branch-protection thread-resolution gates clear. Composable and chainable — runnable standalone via /lisa:pull-request:review or invoked inline by other skills (drive-pr-to-merge, verify) via the Skill tool.
+
 
 # Address & Resolve PR Review Comments
 
@@ -56,11 +58,28 @@ gh pr checks <pr> --json name,state,bucket,description \
   --jq '.[] | select(.name | test("(?i)coderabbit|review")) | "\(.name)\t\(.state)\t\(.description)"'
 ```
 
-**The state column reads `SUCCESS` whether the review was real or hollow — only
-the description distinguishes them.** `Review approved` / `Review completed` is
-a real review; `Review rate limited`, `Review queued`, or a missing context is
-not. Never read `gh pr view --json statusCheckRollup` for this: CodeRabbit posts
-a legacy commit status, which that route returns *without* the description.
+**The state column passes whether the review was real or hollow — only the
+reviewer's words distinguish them.** For a commit status those words are the
+description: `Review approved` / `Review completed` is a real review;
+`Review rate limited`, `Review queued`, or a missing context is not. A reviewer
+can also report through a **check run** instead, and then this command cannot
+tell you anything: the description column is empty for a check run, which
+reads `SUCCESS` when it reviewed and `NEUTRAL` — still passing a required
+check — when it was throttled. The run's result is the first line of its
+summary, so use `node scripts/check-third-party-review-evidence.mjs --sha <head-sha> --repo <owner>/<repo> --json`,
+which reads both representations. Never read `gh pr view --json statusCheckRollup`
+for this: it returns a commit status *without* its description.
+
+Use the owning PR's repository. A missing or invalid repository is a usage
+error before any GitHub read; it establishes no review verdict.
+
+**Stop on `pull-requests-unreadable`: review status is unknown.** Report
+`unknown — PR discovery unreadable (<reason>)` and stop under
+`tool-access-gate`, keeping the PR open and every check enabled. Do not report
+`reviewed` or `NOT REVIEWED`, post a reviewer-specific substitute, or make a
+merge decision from this outcome. Restore the configured GitHub read access
+before rerunning the prover; this adds no automatic retry loop. Return the
+unknown report before continuing to Steps 2–4.
 
 Where the project ships Lisa's guard, prefer its machine-readable form, which
 also says whether the check is ruleset-required (so whether branch protection
@@ -73,10 +92,19 @@ node scripts/check-skipped-required-checks.mjs --pr=<pr> --json
 It reports and never fails — a hollow check is often a vendor spending cap, not
 a repository defect, and it is not this skill's call to block on one.
 
+**Do not wait for a rate limit to reset, and do not re-request the review.** A
+`Review rate limited` status, including decorated forms such as
+`Review rate limited (retry in 12m)`, is handled like every other vacuous
+review. Report it here. `lisa-drive-pr-to-merge` then posts a local adversarial
+review substitute for the current head right away and keeps driving. Waiting
+out the window stalls the pull request for an hour or more and reads no code.
+Re-requesting overwrites the status and can destroy a real review.
+
 Carry the finding into your Step 4 report. **Do not write "no unresolved review
 threads" on its own** — it is true of an unreviewed PR too. Say which you
 observed:
 
+- `unknown — PR discovery unreadable (the open pull requests could not be read); review verdict deferred until access is restored`
 - `reviewed — CodeRabbit "Review approved", 0 unresolved threads`
 - `NOT REVIEWED — CodeRabbit success but "Review rate limited" (vacuous); 0 threads means nobody looked`
 - `NOT REVIEWED — no review check reported on this PR at all`
@@ -118,8 +146,11 @@ owns those.
 
 **Open the report with the Step 1b verdict, before the thread counts.** A thread
 summary describes what was done about review findings; it says nothing about
-whether a review produced any. State `reviewed` or `NOT REVIEWED (<why>)` first,
-then the counts. A caller that records "reviews addressed" in evidence must
+whether a review produced any. State `reviewed` or `NOT REVIEWED (<why>)` first
+when discovery succeeded, then the counts. Failed discovery returns the
+`unknown — PR discovery unreadable (<reason>)` report in Step 1b instead;
+never turn an unknown read into a reviewer doing no work.
+A caller that records "reviews addressed" in evidence must
 carry that verdict through verbatim — a PR whose only review check was vacuous
 has not been reviewed, no matter how clean its thread list is.
 
