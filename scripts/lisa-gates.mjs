@@ -865,7 +865,7 @@ export const REGISTRY = Object.freeze({
     task: "check:dead-code",
     shippedAs: KNIP_CHECK_TASK,
     declareOnly:
-      "Every npm stack ships `knip:check`, which proves this and which a project without the concern-named script resolves through automatically. CI's fallback runs it directly (and falls back again to the older `knip`), so the property is proved today whether or not the concern-named script exists.",
+      "Every npm stack ships `knip:check`, which proves this and which a project without the concern-named script resolves through automatically. Seeding declares it at pull-request with that task (and falls back to the older `knip`), so the property is proved whether or not the concern-named script exists.",
     moments: PUSH_ONWARD,
   },
   "credential-leakage": {
@@ -875,6 +875,18 @@ export const REGISTRY = Object.freeze({
     declareOnly:
       "Proved by the gitleaks binary in the pre-commit built-in and by a hosted scanner in CI. Neither is a package script.",
     moments: COMMIT_ONWARD,
+  },
+  "introduced-history-credential-leakage": {
+    label: "🔐 Introduced History Credential Leakage",
+    summary:
+      "Every actual introduced Git history range is scanner-clean and fully redacted.",
+    task: "security:check-introduced-history",
+    declareOnly:
+      "When declared, the emitted scripts/lisa-history-secrets.mjs proves the actual range with a pinned offline scanner, without a package script.",
+    ownedFacadeAt: [PUSH, PULL_REQUEST],
+    needs: NO_INSTALL,
+    moments: [PUSH, PULL_REQUEST],
+    work: "introduced commits scanned",
   },
   "dependency-vulnerability": {
     label: "🔒 Security Scan",
@@ -1091,9 +1103,12 @@ export const REGISTRY = Object.freeze({
  * the two disagree, which is what keeps a static copy true.
  */
 export const QUALITY_JOB_GATES = Object.freeze({
+  history_secrets: "introduced-history-credential-leakage",
   lint: CODE_STYLE,
-  lint_slow: "code-style-slow",
-  typecheck: "type-correctness",
+  // `lint_slow`, `typecheck`, `format`, `build` and `dead_code` are not here
+  // because their jobs are gone (#3052): each ran `$runner $task` for a
+  // declared gate, which a `declared_gates` leg runs identically under the same
+  // context name. Losing the row is what hands the gate to the runner.
   verification_coverage: COVERAGE_ADEQUACY,
   test_unit: "test-correctness",
   test_mutation: "test-meaningfulness",
@@ -1104,14 +1119,11 @@ export const QUALITY_JOB_GATES = Object.freeze({
   // the question this table answers is "which gate governs this job", and the
   // answer does not depend on which file the job is written in.
   playwright_e2e_aggregate: "e2e-browser",
-  format: FORMAT_CONFORMANCE,
-  build: "build-integrity",
   work_item_traceability: "traceability",
   performance_budget: "performance-budget",
   test_node_suites: "test-node-suites",
   environment_reset: "environment-reset",
   environment_reseed: "environment-reseed",
-  dead_code: "dead-code",
   // Governs the property in EVERY workflow that enforces it, which is what
   // #2932 turned on. `quality.yml` and `quality-rails.yml` both run the check
   // in a job named `📚 Learnings Budget`; `plugins-sync.yml` used to run the
@@ -1300,13 +1312,7 @@ export function momentLegs({
 }) {
   const spokenFor = new Set(jobBackedGates());
   const legs = [];
-  for (const gate of resolveMoment({
-    gates,
-    moment,
-    runner,
-    includeOff: true,
-    scripts,
-  })) {
+  for (const gate of resolvedForLegs({ gates, moment, runner, scripts })) {
     if (spokenFor.has(gate.id)) continue;
     if (isNonRunnerProverMode(gate.mode)) continue;
 
@@ -1363,6 +1369,56 @@ export function momentLegs({
     });
   }
   return legs;
+}
+
+/**
+ * The gates a moment's legs are built from, including what a release pass
+ * inherits.
+ *
+ * Every declaration resolved at `moment`, plus one case where the release pass
+ * inherits (#4458). Lisa 4.80.0 (#3052) deleted five hand-written `quality.yml`
+ * jobs because a leg proves the same property. Those jobs ran wherever
+ * `quality.yml` ran, including the release pass the reusable `release.yml`
+ * makes at `pre-deploy:<env>`. A leg runs only where its gate is declared, and
+ * the fleet declares these gates at `pull-request` and nowhere else, so that
+ * pass silently stopped re-checking them.
+ *
+ * So, at a `pre-deploy` moment only, each of those five gates that is NOT
+ * declared at this moment inherits its `pull-request` resolution: same task,
+ * same level. This restores what a 4.79 release pass ran without asking any
+ * project to change its configuration.
+ *
+ * An explicit declaration at the moment always wins, `off` included. A gate the
+ * project turned `off` at pull-request inherits nothing. Nothing outside the
+ * five is inherited, and no other moment inherits.
+ * @param {object} options Resolution inputs, as for `momentLegs`.
+ * @param {object} options.gates The project gates block.
+ * @param {string} options.moment The moment to resolve.
+ * @param {string} options.runner The task runner.
+ * @param {object|null} options.scripts The project's package scripts.
+ * @returns {object[]} Resolved gates, declared ones first.
+ */
+function resolvedForLegs({ gates, moment, runner, scripts }) {
+  const resolved = resolveMoment({
+    gates,
+    moment,
+    runner,
+    includeOff: true,
+    scripts,
+  });
+  if (momentFamily(moment) !== PRE_DEPLOY) return resolved;
+  const present = new Set(resolved.map(gate => gate.id));
+  const owned = new Set(runnerOwnedJobs().map(job => job.gate));
+  const inherited = resolveMoment({
+    gates,
+    moment: PULL_REQUEST,
+    runner,
+    includeOff: true,
+    scripts,
+  }).filter(
+    gate => owned.has(gate.id) && !present.has(gate.id) && gate.level !== "off"
+  );
+  return [...resolved, ...inherited];
 }
 
 /**
@@ -1635,22 +1691,6 @@ const QUALITY_FALLBACKS = Object.freeze({
     command: "<package-manager> run lint",
     steps: ["🦀 Verify oxlint is installed", "🧹 Run linter (oxlint + eslint)"],
   },
-  lint_slow: {
-    command: "<package-manager> run lint:slow",
-    steps: ["🐢 Run slow lint rules"],
-  },
-  typecheck: {
-    command: "<package-manager> run typecheck",
-    steps: ["🔍 Run type check"],
-  },
-  build: {
-    command: "<package-manager> run build",
-    steps: ["🏗️ Build project"],
-  },
-  format: {
-    command: "<package-manager> run format:check",
-    steps: ["📐 Check formatting"],
-  },
   test_unit: {
     // `test:cov`, not `test:unit`: the CI fallback proves the suite AND the
     // coverage thresholds in one run, so seeding the registry default would
@@ -1711,11 +1751,6 @@ const QUALITY_FALLBACKS = Object.freeze({
     command: "<package-manager> audit, filtered through audit.ignore*.json",
     seedRun: [SECURITY_AUDIT_TASK],
     steps: ["📋 Load audit exclusions", "🔒 Run security audit"],
-  },
-  dead_code: {
-    command: "<package-manager> run knip:check",
-    seedRun: [KNIP_CHECK_TASK, KNIP],
-    steps: ["🗑️ Run dead code detection (knip)"],
   },
   learnings_budget: {
     unconditional: true,
@@ -2531,13 +2566,46 @@ function reasonFor(entry, hit, declarable, moment) {
  * @param {string} [options.runner] Task runner to record, when none is declared.
  * @returns {{gates: object, seeded: Array<{gate: string, moment: string, run: string|null}>, skipped: Array<{gate: string, moment: string, reason: string}>}} The merged block and what it did.
  */
+/**
+ * The pull-request jobs #3052 deleted because a declared gate leg proves the
+ * same property, with the gate each one proved and how that gate is seeded.
+ *
+ * Two consumers read it, which is why it is one table:
+ *
+ * - `seedGates` still declares each gate at pull-request. It used to find
+ *   them through their `quality.yml` inventory entries, which went with the
+ *   jobs. A leg exists only for a gate the project declares, so without this a
+ *   project seeded from then on would get no declaration, no leg and no check,
+ *   and nothing would report the absence. `seedRun: null` takes the registry
+ *   default; a non-empty array lists candidate tasks in preference order.
+ * - `RETIRED_SKIP_JOB_TOKENS` retires each job's `skip_jobs` token.
+ *
+ * A function rather than a frozen literal so it is evaluated when a caller asks
+ * rather than once at module load, which is what lets the mutation gate's
+ * per-test activation reach it.
+ * @returns {readonly {token: string, gate: string, moment: string, seedRun: readonly string[]|null}[]} One entry per deleted job.
+ */
+function runnerOwnedJobs() {
+  return Object.freeze(
+    [
+      ["lint_slow", "code-style-slow", null],
+      ["typecheck", "type-correctness", null],
+      ["format", FORMAT_CONFORMANCE, null],
+      ["build", "build-integrity", null],
+      ["dead_code", "dead-code", Object.freeze([KNIP_CHECK_TASK, KNIP])],
+    ].map(([token, gate, seedRun]) =>
+      Object.freeze({ token, gate, moment: PULL_REQUEST, seedRun })
+    )
+  );
+}
+
 export function seedGates({ gates = {}, scripts = {}, runner } = {}) {
   const seeded = [];
   const skipped = [];
   const next = { ...gates };
   if (runner !== undefined && next.runner === undefined) next.runner = runner;
 
-  for (const entry of HARDCODED_INVOCATIONS) {
+  for (const entry of [...HARDCODED_INVOCATIONS, ...runnerOwnedJobs()]) {
     const { gate, moment } = entry;
     if (entry.facade === NEVER_CONSULTS) {
       skipped.push({
@@ -2629,8 +2697,6 @@ function seedTask(entry, scripts) {
  */
 export const SKIP_JOB_TOKENS = Object.freeze({
   lint: Object.freeze(["lint"]),
-  lint_slow: Object.freeze(["lint_slow"]),
-  typecheck: Object.freeze(["typecheck"]),
   e2e_coverage: Object.freeze(["e2e_coverage"]),
   state_classification: Object.freeze(["state_classification"]),
   bdd_coverage: Object.freeze(["bdd_coverage"]),
@@ -2664,14 +2730,11 @@ export const SKIP_JOB_TOKENS = Object.freeze({
   // a suppression that cannot happen. The suite is now selected by which
   // workflow a caller calls, and governed inside it by the `e2e-browser` gate.
   playwright_e2e: Object.freeze([]),
-  format: Object.freeze(["format"]),
-  build: Object.freeze(["build"]),
   threshold_ratchet: Object.freeze(["threshold_ratchet"]),
   work_item_traceability: Object.freeze(["work_item_traceability"]),
   test_node_suites: Object.freeze(["test_node_suites"]),
   environment_reset: Object.freeze(["environment_reset"]),
   environment_reseed: Object.freeze(["environment_reseed"]),
-  dead_code: Object.freeze(["dead_code"]),
   conflict_markers: Object.freeze(["conflict_markers"]),
   sg_scan: Object.freeze(["sg_scan"]),
   floor_collisions: Object.freeze(["floor_collisions"]),
@@ -2696,6 +2759,41 @@ export const SKIP_JOB_TOKENS = Object.freeze({
  * `reason` is written for the caller's `ci.yml`, because that is the file the
  * token is in and the only file the operator can change.
  */
+/**
+ * Why a `skip_jobs` token whose job moved onto the gate runner suppresses nothing.
+ *
+ * The five jobs retired by #3052 each ran `$runner $task` for one declared
+ * gate. A `declared_gates` leg now runs that task under the same context, and
+ * a leg answers to the declaration rather than to `skip_jobs` — so the remedy
+ * for a caller that used to pass the token is the declaration itself.
+ * @param {string} gate The gate the deleted job proved.
+ * @returns {string} The retirement reason.
+ */
+function runnerOwnedRetirement(gate) {
+  return `This job was DELETED (#3052) because the generic gate runner proves the same property: the job ran \`$runner $task\` for the ${gate} gate, and a \`declared_gates\` leg runs exactly that under the same context name. A leg answers to the gate declaration, not to \`skip_jobs\`, so this token suppresses nothing. To stop running the check, declare gates.${gate}["pull-request"] as "off" in .lisa.config.json — that says on the record that this project does not govern the property at pull-request.`;
+}
+
+/**
+ * The retirement entries for the jobs in `runnerOwnedJobs`.
+ *
+ * `reason` is a getter so the sentence is built when it is read, not at module
+ * load — the same reason `runnerOwnedJobs` is a function.
+ * @returns {Record<string, {retiredIn: string, reason: string}>} Entries keyed by token.
+ */
+function retiredRunnerOwnedTokens() {
+  return Object.fromEntries(
+    runnerOwnedJobs().map(({ token, gate }) => [
+      token,
+      Object.freeze({
+        retiredIn: "#3052",
+        get reason() {
+          return runnerOwnedRetirement(gate);
+        },
+      }),
+    ])
+  );
+}
+
 export const RETIRED_SKIP_JOB_TOKENS = Object.freeze({
   zap_baseline: Object.freeze({
     retiredIn: "#2938",
@@ -2707,6 +2805,7 @@ export const RETIRED_SKIP_JOB_TOKENS = Object.freeze({
     reason:
       "The `🔒 Skipped Required Checks` job is no longer skippable, by rule rather than by omission: a gate whose job is to detect silencing cannot itself be silenceable (see NON_DECLARABLE_JOBS). Delete the token — leaving it changes nothing, and it reads as an off-switch that still works.",
   }),
+  ...retiredRunnerOwnedTokens(),
 });
 
 /**
@@ -2817,7 +2916,11 @@ export function gateForSkipJob(token) {
 export function skipJobMigration(token, moment = PULL_REQUEST) {
   const resolved = gateForSkipJob(token);
   if (resolved.gate === null) {
-    return { ...resolved, moment, declaration: null };
+    return {
+      ...resolved,
+      moment,
+      declaration: retiredDeclaration(token, moment),
+    };
   }
   const permitted =
     isMoment(moment) &&
@@ -2830,6 +2933,27 @@ export function skipJobMigration(token, moment = PULL_REQUEST) {
     moment,
     declaration: `"${resolved.gate}": { "${moment}": "off" }`,
   };
+}
+
+/**
+ * The `off` declaration that keeps a retired runner-owned check off.
+ *
+ * A token retired by #3052 still names a property: its job was deleted because
+ * a declared gate leg now proves the same thing, and that leg answers to the
+ * declaration rather than to `skip_jobs`. So a caller that passed the token to
+ * keep the check off has exactly one way to keep it off — this declaration —
+ * and saying only "delete the token" would switch the check back on.
+ * @param {string} token The retired token.
+ * @param {string} moment The caller's moment.
+ * @returns {string|null} The declaration, or null when the token names no gate or the gate is not legal at that moment.
+ */
+function retiredDeclaration(token, moment) {
+  const owned = runnerOwnedJobs().find(job => job.token === token);
+  if (owned === undefined || !isMoment(moment)) return null;
+  const legal = (REGISTRY[owned.gate]?.moments ?? []).includes(
+    momentFamily(moment)
+  );
+  return legal ? `"${owned.gate}": { "${moment}": "off" }` : null;
 }
 
 /**
@@ -3123,6 +3247,7 @@ export const REUSE_CLASSES = Object.freeze(Object.values(REUSE_CLASS));
  * A project overrides a row with `gates.<id>.reuse` in `.lisa.config.json`.
  */
 export const GATE_REUSE_CLASS = Object.freeze({
+  "introduced-history-credential-leakage": { class: REUSE_CLASS.NEVER },
   accessibility: { class: REUSE_CLASS.NEVER },
   // A guard whose job is to detect a stale generated artifact must not itself
   // be satisfied by a record of a previous run, and it costs seconds.
@@ -5441,16 +5566,18 @@ export function resolveMoment({
       declared === null &&
       definition?.declareOnly !== undefined &&
       definition?.shippedAs === undefined &&
-      scripts !== null &&
-      typeof scripts === "object" &&
-      !Object.hasOwn(scripts, task) &&
-      HARDCODED_INVOCATIONS.some(
-        invocation =>
-          invocation.gate === id &&
-          invocation.moment === moment &&
-          invocation.facade === CONSULTS_THEN_FALLS_BACK &&
-          invocation.unconditional === true
-      );
+      ((scripts !== null &&
+        typeof scripts === "object" &&
+        !Object.hasOwn(scripts, task)) ||
+        (id === "introduced-history-credential-leakage" && scripts === null)) &&
+      (definition?.ownedFacadeAt?.includes(moment) ||
+        HARDCODED_INVOCATIONS.some(
+          invocation =>
+            invocation.gate === id &&
+            invocation.moment === moment &&
+            invocation.facade === CONSULTS_THEN_FALLS_BACK &&
+            invocation.unconditional === true
+        ));
 
     resolved.push({
       id,

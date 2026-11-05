@@ -1,0 +1,14 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": "^(exec|write|edit|apply_patch)$",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "root=\"$(printf '%s' \"${DEVIN_PROJECT_DIR-}\" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')\"; [ -n \"$root\" ] || root=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; [ -f \"$root/scripts/lisa-enforcement-fallback.sh\" ] || { echo \"Lisa enforcement dispatcher missing at $root/scripts/lisa-enforcement-fallback.sh; refusing (run lisa apply)\" >&2; exit 2; }; payload=$(cat); mapped=$(printf '%s' \"$payload\" | jq -c 'if (.tool_name | type) == \"string\" then .tool_name |= ({\"exec\": \"Bash\", \"write\": \"Write\", \"edit\": \"Edit\"}[.] // .) else . end' 2>/dev/null) || mapped=\"\"; [ -n \"$mapped\" ] || { echo \"Lisa could not map the Devin tool name (jq missing or failed); refusing\" >&2; exit 2; }; printf '%s' \"$mapped\" | /bin/bash \"$root/scripts/lisa-enforcement-fallback.sh\"",
+          "timeout": 30
+        }
+      ]
+    }
+  ]
+}

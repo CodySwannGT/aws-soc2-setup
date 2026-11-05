@@ -3,6 +3,8 @@ name: lisa-confluence-to-tracker
 description: "Break down a Confluence PRD…"
 allowed-tools: ["Skill", "Bash"]
 ---
+Break down a Confluence PRD page into Epics, Stories, and Sub-tasks in the configured destination tracker (JIRA, GitHub Issues, or Linear per .lisa.config.json). Use this skill whenever the user shares a Confluence PRD URL and wants it converted into tracker tickets, or asks to "break down this Confluence spec", "create tickets from a Confluence page", "turn this Confluence doc into tickets", or similar. This skill mirrors `lisa-notion-to-tracker` for projects whose PRDs live in Confluence — the workflow, gates, dry-run mode, and validation rules are identical; only the source-of-truth tool surface differs (Confluence MCP instead of Notion MCP).
+
 
 # Confluence PRD to Tracker Breakdown
 
@@ -234,6 +236,11 @@ planning proceeds. Per atom:
   requirement.
 - **Pattern shape (SHOULD)** — an EARS pattern (ubiquitous / When / While / If-then / Where) or an
   equivalent single-behavior sentence; conforming shapes decompose into Gherkin mechanically.
+- **Learned planning checks** — load the `Planning (...)` checks through the bounded projection
+  (`lisa-task-decomposition` step 0). Test the register against every `Planning (prd)` check; an
+  atom or a missing atom that fails one is a `product-clarity` item quoting the check, exactly
+  like the failures above. Carry the `Planning (decomposition)` checks into Phases 3–5. Each is
+  a gap a dispatched worker once had to stop and ask about, so catching it here is the point.
 
 Failures here are **requirement-level product clarifications**, not internal errors: report each in
 the dry-run report as a `product-clarity` item quoting the atom verbatim, naming the defect, and
